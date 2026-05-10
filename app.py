@@ -2186,7 +2186,7 @@ def render_player_ranking(df, hist):
 # Main
 # ================================
 
-st.title("Suno Short-Term Trending")
+st.title("Suno Trending v1.0")
 st.caption("최근 4일 생성곡 기준으로 누적 반응,  최근 변화량 등 반영")
 
 raw_db, raw_hist, error = load_encrypted_data()
