@@ -407,10 +407,21 @@ def score_songs(
             view[col] = 0
         view[col] = pd.to_numeric(view[col], errors="coerce").fillna(0)
 
+    if "adjusted_comment_count" in view.columns:
+        view["effective_comment_count"] = pd.to_numeric(
+            view["adjusted_comment_count"],
+            errors="coerce",
+        )
+        view["effective_comment_count"] = view["effective_comment_count"].fillna(view["comment_count"])
+    else:
+        view["effective_comment_count"] = view["comment_count"]
+
+    view["effective_comment_count"] = view["effective_comment_count"].clip(lower=0)
+
     view["base_score"] = (
         play_weight * view["play_count"].apply(lambda x: math.log1p(max(0, x)))
         + like_weight * view["upvote_count"].apply(lambda x: math.log1p(max(0, x)))
-        + comment_weight * view["comment_count"].apply(lambda x: math.log1p(max(0, x)))
+        + comment_weight * view["effective_comment_count"].apply(lambda x: math.log1p(max(0, x)))
     )
 
     view["growth_score_raw"] = (
@@ -555,6 +566,9 @@ def build_song_payload(df):
             "play_count": int(float(r.get("play_count", 0) or 0)),
             "upvote_count": int(float(r.get("upvote_count", 0) or 0)),
             "comment_count": int(float(r.get("comment_count", 0) or 0)),
+            "effective_comment_count": float(r.get("effective_comment_count", r.get("comment_count", 0)) or 0),
+            "adjusted_comment_count": float(r.get("adjusted_comment_count", r.get("comment_count", 0)) or 0),
+            "comment_quality_ratio": float(r.get("comment_quality_ratio", 1) or 1),
             "is_outlier": is_outlier,
             "outlier_reasons": safe_text(r.get("outlier_reasons", "")),
             "song_url": safe_url(r.get("song_url", "")),
