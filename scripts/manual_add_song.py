@@ -5,6 +5,12 @@ import time
 import requests
 import pandas as pd
 from urllib.parse import urlparse
+from pathlib import Path
+
+# repo root를 import path에 추가
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from scripts.update_public_song_pages import (
     ensure_data_files,
@@ -12,7 +18,6 @@ from scripts.update_public_song_pages import (
     flatten_song,
     history_snapshot,
 )
-
 
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
