@@ -65,6 +65,7 @@ def ensure_data_files():
             "is_contest_clip", "contest_ids", "download_disabled_reason",
             "is_public", "is_hidden", "is_trashed", "explicit",
             "model", "major_model_version", "display_tags", "duration",
+            "lyrics", "prompt", "gpt_description_prompt",
             "song_url", "audio_url", "image_url", "source",
         ]).to_csv(DB_PATH, index=False, encoding="utf-8-sig")
 
@@ -134,6 +135,21 @@ def flatten_song(song, old_row=None, source="public"):
         "major_model_version": song.get("major_model_version"),
         "display_tags": song.get("display_tags") or metadata.get("tags"),
         "duration": metadata.get("duration"),
+
+        # 상세 페이지에서 가져올 수 있는 가사/프롬프트 후보
+        "lyrics": (
+            song.get("lyrics")
+            or metadata.get("lyrics")
+            or metadata.get("lyric")
+        ),
+        "prompt": (
+            song.get("prompt")
+            or metadata.get("prompt")
+        ),
+        "gpt_description_prompt": (
+            song.get("gpt_description_prompt")
+            or metadata.get("gpt_description_prompt")
+        ),
 
         "song_url": f"https://suno.com/song/{song_id}" if song_id else None,
         "audio_url": song.get("audio_url"),
