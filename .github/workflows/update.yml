@@ -67,5 +67,8 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update encrypted Suno data"
-            git push
+
+            # 원격에 새 commit이 있으면 먼저 받아서 내 commit을 rebase한 뒤 push
+            git pull --rebase origin main
+            git push origin main
           fi
