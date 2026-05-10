@@ -43,22 +43,6 @@ st.set_page_config(
 # Text / encoding helpers
 # ================================
 
-def looks_broken(s: str) -> bool:
-    if not s:
-        return False
-
-    markers = [
-        "Ã", "ã", "Â", "â", "ð", "Ð", "Ñ", "Î", "Ï",
-        "ç", "è", "é", "ê", "ë", "í", "ì", "Å", "�",
-        "\x80", "\x81", "\x82", "\x83", "\x84", "\x85", "\x86", "\x87",
-        "\x88", "\x89", "\x8a", "\x8b", "\x8c", "\x8d", "\x8e", "\x8f",
-        "\x90", "\x91", "\x92", "\x93", "\x94", "\x95", "\x96", "\x97",
-        "\x98", "\x99", "\x9a", "\x9b", "\x9c", "\x9d", "\x9e", "\x9f",
-    ]
-
-    return any(m in s for m in markers)
-
-
 def broken_score(s: str) -> int:
     if not s:
         return 999999
@@ -69,11 +53,7 @@ def broken_score(s: str) -> int:
     ]
 
     score = sum(s.count(ch) * 3 for ch in bad_markers)
-
-    # C1 control characters
     score += sum(5 for ch in s if 0x80 <= ord(ch) <= 0x9F)
-
-    # 너무 많이 사라진 후보 방지
     score += max(0, 8 - len(s))
 
     return score
@@ -119,7 +99,6 @@ def fix_mojibake(value):
 
     candidates = [original]
 
-    # ftfy 1차 복구
     if ftfy is not None:
         try:
             fixed = ftfy.fix_text(original)
@@ -128,7 +107,6 @@ def fix_mojibake(value):
         except Exception:
             pass
 
-    # 직접 복구, 최대 3회 반복
     frontier = list(candidates)
 
     for _ in range(3):
@@ -172,15 +150,6 @@ def fmt_int(value):
         return "0"
 
 
-def fmt_float(value, digits=1):
-    try:
-        if pd.isna(value):
-            return "-"
-        return f"{float(value):,.{digits}f}"
-    except Exception:
-        return "-"
-
-
 def safe_url(value):
     if pd.isna(value):
         return ""
@@ -188,6 +157,34 @@ def safe_url(value):
     if s.lower() in ["nan", "none", ""]:
         return ""
     return s
+
+
+def normalize_handle(value):
+    handle = fix_mojibake(value).strip()
+
+    if not handle or handle.lower() in ["nan", "none"]:
+        return ""
+
+    if handle.startswith("@"):
+        handle = handle[1:]
+
+    return handle
+
+
+def build_creator_html(display_name_value, handle_value):
+    display_name = fix_mojibake(display_name_value).strip()
+    handle = normalize_handle(handle_value)
+
+    if display_name.lower() in ["nan", "none"]:
+        display_name = ""
+
+    # display_name이 없으면 handle을 닉네임처럼 1줄에 표시
+    primary = display_name or handle or "-"
+
+    if handle:
+        return f"{html.escape(primary)}<div class='subtle'>@{html.escape(handle)}</div>"
+
+    return html.escape(primary)
 
 
 # ================================
@@ -591,14 +588,6 @@ def render_top_table(df):
         font-variant-numeric: tabular-nums;
         color: #111827;
     }
-
-    .score {
-        font-weight: 800;
-        text-align: right;
-        white-space: nowrap;
-        font-variant-numeric: tabular-nums;
-        color: #111827;
-    }
     </style>
     """
 
@@ -661,14 +650,11 @@ def render_top_table(df):
         audio_url = safe_url(r.get("audio_url", ""))
         song_url = safe_url(r.get("song_url", ""))
         title = esc(r.get("title", "Untitled"))
-        handle = esc(r.get("handle", ""))
-        display_name = esc(r.get("display_name", ""))
 
-        creator = display_name or handle
-        if handle and display_name and handle.lower() not in display_name.lower():
-            creator = f"{display_name}<div class='subtle'>@{handle}</div>"
-        elif handle:
-            creator = f"@{handle}"
+        creator = build_creator_html(
+            r.get("display_name", ""),
+            r.get("handle", ""),
+        )
 
         created_at = r.get("created_at")
         if pd.notna(created_at):
@@ -712,7 +698,6 @@ def render_top_table(df):
                 <td class="num">{fmt_int(r.get("play_count", 0))}</td>
                 <td class="num">{fmt_int(r.get("upvote_count", 0))}</td>
                 <td class="num">{fmt_int(r.get("comment_count", 0))}</td>
-                <td class="score">{fmt_float(r.get("trend_score", 0), 1)}</td>
             </tr>
             """
         )
@@ -727,11 +712,10 @@ def render_top_table(df):
                     <th style="width:44px; text-align:right;">순위</th>
                     <th style="width:72px;">앨범</th>
                     <th>곡 제목</th>
-                    <th style="width:190px;">원작자</th>
+                    <th style="width:210px;">원작자</th>
                     <th style="width:90px; text-align:right;">플레이</th>
                     <th style="width:90px; text-align:right;">좋아요</th>
                     <th style="width:80px; text-align:right;">댓글</th>
-                    <th style="width:90px; text-align:right;">점수</th>
                 </tr>
             </thead>
             <tbody>
@@ -755,7 +739,7 @@ def render_top_table(df):
 # ================================
 
 st.title("Suno Short-Term Trending")
-st.caption("최근 4일 생성곡 기준 · 누적 반응 + 최근 변화량 + 신선도 점수")
+st.caption("최근 4일 생성곡 기준 · 누적 반응 + 최근 변화량 + 신선도 반영")
 
 raw_db, raw_hist, error = load_encrypted_data()
 
@@ -801,105 +785,4 @@ m4.metric("마지막 업데이트", last_checked.strftime("%Y-%m-%d %H:%M UTC") 
 
 st.divider()
 
-tab1, tab2, tab3 = st.tabs(["Top 200", "Score Formula", "History"])
-
-with tab1:
-    render_top_table(view)
-
-with tab2:
-    st.subheader("현재 점수 공식")
-
-    formula_text = (
-        "base_score =\n"
-        f"  log1p(play_count) × {PLAY_WEIGHT}\n"
-        f"+ log1p(upvote_count) × {LIKE_WEIGHT}\n"
-        f"+ log1p(comment_count) × {COMMENT_WEIGHT}\n\n"
-        "growth_score =\n"
-        f"  (\n"
-        f"    log1p(play_delta_{GROWTH_WINDOW_HOURS}h) × 1.2\n"
-        f"  + log1p(upvote_delta_{GROWTH_WINDOW_HOURS}h) × 5.0\n"
-        f"  + log1p(comment_delta_{GROWTH_WINDOW_HOURS}h) × 8.0\n"
-        f"  ) × {GROWTH_WEIGHT}\n\n"
-        "freshness =\n"
-        f"  max(0, 1 - age_hours / 96) ^ {FRESHNESS_POWER}\n\n"
-        "freshness_score =\n"
-        f"  freshness × {FRESHNESS_WEIGHT}\n\n"
-        "trend_score =\n"
-        "  base_score + growth_score + freshness_score"
-    )
-
-    st.code(formula_text, language="text")
-
-    st.markdown(
-        """
-- `created_at`은 Suno에서 곡이 생성된 시각입니다.
-- `first_seen_at`은 수집기가 처음 발견한 시각입니다.
-- `last_checked_at`은 수집기가 마지막으로 곡 페이지를 확인한 시각입니다.
-- `growth_score`는 history CSV에 쌓인 기록을 사용합니다.
-"""
-    )
-
-    formula_cols = [
-        "rank",
-        "title",
-        "trend_score",
-        "base_score",
-        "growth_score",
-        "freshness_score",
-        "age_hours",
-        "play_delta_window",
-        "upvote_delta_window",
-        "comment_delta_window",
-    ]
-
-    formula_cols = [c for c in formula_cols if c in view.columns]
-
-    st.dataframe(
-        view[formula_cols],
-        use_container_width=True,
-        hide_index=True,
-    )
-
-with tab3:
-    if hist.empty:
-        st.info("아직 history 데이터가 없습니다.")
-    else:
-        options = view[["id", "title", "handle"]].copy()
-        options["label"] = (
-            options["title"].fillna("(untitled)").astype(str)
-            + " — @"
-            + options["handle"].fillna("").astype(str)
-        )
-
-        if options.empty:
-            st.info("표시 중인 곡이 없습니다.")
-        else:
-            selected = st.selectbox(
-                "곡 선택",
-                options["label"].tolist(),
-            )
-
-            selected_id = options.loc[
-                options["label"] == selected,
-                "id"
-            ].iloc[0]
-
-            h = hist[hist["id"].astype(str) == str(selected_id)].copy()
-            h = h.sort_values("checked_at")
-
-            if h.empty:
-                st.info("선택한 곡의 history가 없습니다.")
-            else:
-                chart_cols = [
-                    c for c in ["play_count", "upvote_count", "comment_count"]
-                    if c in h.columns
-                ]
-
-                if chart_cols:
-                    st.line_chart(h.set_index("checked_at")[chart_cols])
-
-                st.dataframe(
-                    h,
-                    use_container_width=True,
-                    hide_index=True,
-                )
+render_top_table(view)
