@@ -218,22 +218,49 @@ def main():
     print(f"[rank_movement] hist_rows={len(hist)}")
 
     old_current = {}
+    has_previous_rank_data = False
 
     if "current_rank" in db.columns:
         old_rank_df = db[["id", "current_rank"]].copy()
         old_rank_df["current_rank"] = pd.to_numeric(old_rank_df["current_rank"], errors="coerce")
-        old_current = dict(zip(old_rank_df["id"].astype(str), old_rank_df["current_rank"]))
+
+        has_previous_rank_data = old_rank_df["current_rank"].notna().any()
+
+        old_current = dict(
+            zip(
+                old_rank_df["id"].astype(str),
+                old_rank_df["current_rank"],
+            )
+        )
 
     ranked = score_songs(db, hist)
 
     ranked["previous_rank_new"] = ranked["id"].map(old_current)
     ranked["rank_change_new"] = ranked["previous_rank_new"] - ranked["new_current_rank"]
 
+    def get_rank_status(row):
+        if not has_previous_rank_data:
+            return ""
+
+        if pd.isna(row["previous_rank_new"]):
+            return "new"
+
+        if pd.isna(row["rank_change_new"]) or float(row["rank_change_new"]) == 0:
+            return "same"
+
+        if float(row["rank_change_new"]) > 0:
+            return "up"
+
+        return "down"
+
+    ranked["rank_status_new"] = ranked.apply(get_rank_status, axis=1)
+
     db = db.drop(
         columns=[
             "previous_rank",
             "current_rank",
             "rank_change",
+            "rank_status",
         ],
         errors="ignore",
     )
@@ -244,6 +271,7 @@ def main():
                 "new_current_rank": "current_rank",
                 "previous_rank_new": "previous_rank",
                 "rank_change_new": "rank_change",
+                "rank_status_new": "rank_status",
             }
         ),
         on="id",
