@@ -2,8 +2,22 @@ name: Update Suno Song Stats
 
 "on":
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Update mode"
+        required: true
+        default: "full"
+        type: choice
+        options:
+          - full
+          - fast
+
   schedule:
+    # Full update: 신규곡 수집 + 대량 업데이트
     - cron: "5,35 * * * *"
+
+    # Fast update: 현재 Top 200만 업데이트
+    - cron: "15,25,45,55 * * * *"
 
 concurrency:
   group: suno-data-update
@@ -17,8 +31,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Decide update mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "5,35 * * * *" ]; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=fast" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Selected mode:"
+          cat "$GITHUB_OUTPUT"
+
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Sync latest main
         run: |
@@ -26,7 +54,7 @@ jobs:
           git reset --hard origin/main
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -40,7 +68,8 @@ jobs:
         run: |
           python scripts/decrypt_data.py
 
-      - name: Update public song pages
+      - name: Full update public song pages
+        if: steps.mode.outputs.mode == 'full'
         env:
           REQUEST_SLEEP_SECONDS: "0.8"
           MAX_UPDATE_ROWS: "2000"
@@ -49,6 +78,22 @@ jobs:
           SONG_RETENTION_DAYS: "4"
         run: |
           python scripts/update_public_song_pages.py
+
+      - name: Fast update current Top 200
+        if: steps.mode.outputs.mode == 'fast'
+        env:
+          REQUEST_SLEEP_SECONDS: "0.5"
+          TOP_N_FAST_UPDATE: "200"
+          SONG_RETENTION_DAYS: "4"
+          GROWTH_WINDOW_HOURS: "3"
+          PLAY_WEIGHT: "1.0"
+          LIKE_WEIGHT: "3.0"
+          COMMENT_WEIGHT: "4.0"
+          GROWTH_WEIGHT: "2.5"
+          FRESHNESS_WEIGHT: "35.0"
+          FRESHNESS_POWER: "1.35"
+        run: |
+          python scripts/update_top200_fast.py
 
       - name: Encrypt data
         env:
@@ -66,11 +111,35 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
+          # 실행 중 main이 바뀌었는지 확인
+          git fetch origin main
+
+          LOCAL_HEAD=$(git rev-parse HEAD)
+          REMOTE_HEAD=$(git rev-parse origin/main)
+
+          if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+            echo "Remote main changed during this workflow."
+            echo "Skipping data commit to avoid binary ZIP conflict."
+            echo "Next scheduled run will update from the latest main."
+            exit 0
+          fi
+
           git add data/suno_song_db.zip data/suno_song_history.zip
 
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Update encrypted Suno data"
-            git push origin main
+            if [ "${{ steps.mode.outputs.mode }}" = "full" ]; then
+              git commit -m "Update encrypted Suno data"
+            else
+              git commit -m "Fast update Top 200 Suno stats"
+            fi
+
+            if git push origin main; then
+              echo "Pushed encrypted data successfully."
+            else
+              echo "Push was rejected, probably because remote main changed at the same time."
+              echo "Skipping this run safely. Next scheduled run will retry."
+              exit 0
+            fi
           fi
