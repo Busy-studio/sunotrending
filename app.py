@@ -245,6 +245,9 @@ def prepare_db(db):
         "lyrics",
         "prompt",
         "gpt_description_prompt",
+        "previous_rank",
+        "current_rank",
+        "rank_change",
     ]
 
     for col in text_cols:
@@ -557,6 +560,9 @@ def build_song_payload(df):
 
         songs.append({
             "rank": int(r.get("rank", 0)),
+            "rank_change": None if pd.isna(r.get("rank_change", pd.NA)) else float(r.get("rank_change", 0)),
+            "previous_rank": None if pd.isna(r.get("previous_rank", pd.NA)) else int(float(r.get("previous_rank", 0))),
+            "current_rank_saved": None if pd.isna(r.get("current_rank", pd.NA)) else int(float(r.get("current_rank", 0))),
             "id": safe_text(r.get("id", "")),
             "title": safe_text(r.get("title", "Untitled")) or "Untitled",
             "creator": display_name,
@@ -833,6 +839,26 @@ def render_player_ranking(df, hist):
     }
 
     .ctrl-btn:hover { border-color: var(--accent); }
+
+    .rank-change {
+        text-align: center;
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: 900;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .rank-up {
+        color: #dc2626;
+    }
+
+    .rank-down {
+        color: #2563eb;
+    }
+
+    .rank-same {
+        color: var(--muted);
+    }
 
     .mode-actions {
         display: grid;
@@ -1405,6 +1431,7 @@ def render_player_ranking(df, hist):
                         <tr>
                             <th style="width:46px; text-align:center;">선택</th>
                             <th style="width:42px; text-align:right;">순위</th>
+                            <th style="width:58px; text-align:center;">변동</th>
                             <th style="width:76px;">앨범</th>
                             <th style="width:360px;">곡 제목</th>
                             <th style="width:170px;">스타일</th>
@@ -1541,7 +1568,27 @@ def render_player_ranking(df, hist):
         const m = Math.floor(sec / 60);
         const s = Math.floor(sec % 60);
 
-        return `${m}:${String(s).padStart(2, "0")}`;
+        return `${m}:${String(s).padStart(2, "0")}`;        
+    }
+
+    function renderRankChange(value) {
+        if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) {
+            return `<span class="rank-same">-</span>`;
+        }
+
+        const n = Number(value);
+
+        if (!isFinite(n) || n === 0) {
+            return `<span class="rank-same">-</span>`;
+        }
+
+        const absN = Math.abs(Math.round(n));
+
+        if (n > 0) {
+            return `<span class="rank-up">▲${absN}</span>`;
+        }
+
+        return `<span class="rank-down">▽${absN}</span>`;
     }
 
     function parseStyleTags(value) {
@@ -1644,7 +1691,7 @@ def render_player_ranking(df, hist):
         if (!filtered.length) {
             songTableBody.innerHTML = `
                 <tr>
-                    <td colspan="10" style="padding:18px; text-align:center; color:#6b7280;">
+                    <td colspan="11" style="padding:18px; text-align:center; color:#6b7280;">
                         표시할 곡이 없습니다.
                     </td>
                 </tr>
@@ -1676,6 +1723,7 @@ def render_player_ranking(df, hist):
                         <button class="add-btn" data-action="toggle-playlist" data-song-id="${escapeHtml(song.id)}" title="선택 / 해제">+</button>
                     </td>
                     <td class="rank">${song.rank}</td>
+                    <td class="rank-change">${renderRankChange(song.rank_change)}</td>
                     <td>
                         <div class="cover-cell">
                             <button class="cover-btn" data-action="cover-click" data-song-id="${escapeHtml(song.id)}" title="재생 / 일시정지">
