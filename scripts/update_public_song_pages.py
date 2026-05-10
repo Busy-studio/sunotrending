@@ -499,13 +499,11 @@ def fetch_public_new_songs():
 
             for item in items:
                 song = extract_song_from_feed_item(item)
-
                 if song is None:
                     continue
 
                 if is_contest(song):
                     contest_count += 1
-                    continue
 
                 page_songs.append(song)
 
