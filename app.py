@@ -736,6 +736,34 @@ def render_player_ranking(df, hist):
         margin-bottom: 12px;
     }
 
+    .now-style-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin: 0 0 10px 0;
+        min-height: 20px;
+    }
+
+    .now-style-tag {
+        display: inline-block;
+        max-width: 125px;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        color: #374151;
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 11px;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .now-style-empty {
+        color: var(--muted);
+        font-size: 12px;
+    }
+
     .small-btn {
         border: 1px solid var(--line-dark);
         background: white;
@@ -833,63 +861,6 @@ def render_player_ranking(df, hist):
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-    }
-
-    .playlist-style-row {
-        margin: 3px 0 2px 0;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        min-width: 0;
-    }
-
-    .playlist-style-toggle {
-        border: 1px solid var(--line-dark);
-        background: #ffffff;
-        color: var(--muted);
-        border-radius: 999px;
-        font-size: 10px;
-        font-weight: 800;
-        padding: 2px 6px;
-        cursor: pointer;
-        flex: 0 0 auto;
-    }
-
-    .playlist-style-tags {
-        display: flex;
-        gap: 3px;
-        align-items: center;
-        min-width: 0;
-        overflow: hidden;
-    }
-
-    .playlist-style-tags.collapsed {
-        flex-wrap: nowrap;
-        white-space: nowrap;
-    }
-
-    .playlist-style-tags.expanded {
-        flex-wrap: wrap;
-        white-space: normal;
-    }
-
-    .playlist-style-tag {
-        display: inline-block;
-        max-width: 82px;
-        border: 1px solid var(--line);
-        background: #f9fafb;
-        color: #374151;
-        border-radius: 999px;
-        padding: 2px 6px;
-        font-size: 10px;
-        line-height: 1.2;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .playlist-style-tags.expanded .playlist-style-tag {
-        max-width: 140px;
     }
 
     .playlist-song-sub {
@@ -1318,6 +1289,7 @@ def render_player_ranking(df, hist):
 
             <div class="now-title" id="nowTitle">플레이리스트에 곡을 추가하세요</div>
             <div class="now-creator" id="nowCreator">앨범 이미지나 체크 버튼을 누르면 추가됩니다.</div>
+            <div class="now-style-tags" id="nowStyleTags"></div>
 
             <div class="lyrics-panel empty" id="lyricsPanel">
                 가사/프롬프트 정보가 있으면 여기에 표시됩니다.
@@ -1377,16 +1349,16 @@ def render_player_ranking(df, hist):
                 <table class="song-table">
                     <thead>
                         <tr>
-                            <th style="width:48px; text-align:center;">선택</th>
-                            <th style="width:44px; text-align:right;">순위</th>
+                            <th style="width:46px; text-align:center;">선택</th>
+                            <th style="width:42px; text-align:right;">순위</th>
                             <th style="width:76px;">앨범</th>
-                            <th>곡 제목</th>
-                            <th style="width:180px;">스타일</th>
+                            <th style="width:360px;">곡 제목</th>
+                            <th style="width:170px;">스타일</th>
                             <th style="width:210px;">창작자</th>
-                            <th style="width:90px; text-align:right;">플레이</th>
-                            <th style="width:90px; text-align:right;">좋아요</th>
-                            <th style="width:80px; text-align:right;">댓글</th>
-                            <th style="width:96px; text-align:center;">상세정보</th>
+                            <th style="width:76px; text-align:right;">플레이</th>
+                            <th style="width:76px; text-align:right;">좋아요</th>
+                            <th style="width:64px; text-align:right;">댓글</th>
+                            <th style="width:90px; text-align:center;">상세정보</th>
                         </tr>
                     </thead>
                     <tbody id="songTableBody"></tbody>
@@ -1447,11 +1419,11 @@ def render_player_ranking(df, hist):
     let repeatOne = false;
     let repeatAll = true;
     let playbackMode = "sequence";
-    let expandedPlaylistStyleIds = new Set();
-
+    
     const nowCoverWrap = document.getElementById("nowCoverWrap");
     const nowTitle = document.getElementById("nowTitle");
     const nowCreator = document.getElementById("nowCreator");
+    const nowStyleTags = document.getElementById("nowStyleTags");
     const playlistEl = document.getElementById("playlist");
     const playlistCount = document.getElementById("playlistCount");
     const lyricsPanel = document.getElementById("lyricsPanel");
@@ -1567,12 +1539,17 @@ def render_player_ranking(df, hist):
         `;
     }
 
-    function renderPlaylistStyleTags(song) {
-        const tags = parseStyleTags(song.style_tags);
+    function renderNowStyleTags(value) {
+        const tags = parseStyleTags(value);
 
         if (!tags.length) {
-            return "";
+            return `<span class="now-style-empty">스타일 정보 없음</span>`;
         }
+
+        return tags.slice(0, 8).map(tag => {
+            return `<span class="now-style-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`;
+        }).join("");
+    }
 
         const id = String(song.id);
         const expanded = expandedPlaylistStyleIds.has(id);
@@ -1730,22 +1707,6 @@ def render_player_ranking(df, hist):
             });
         });
 
-        playlistEl.querySelectorAll("[data-action='toggle-playlist-style']").forEach(btn => {
-            btn.addEventListener("click", event => {
-                event.preventDefault();
-                event.stopPropagation();
-
-                const key = String(btn.dataset.songId);
-
-                if (expandedPlaylistStyleIds.has(key)) {
-                    expandedPlaylistStyleIds.delete(key);
-                } else {
-                    expandedPlaylistStyleIds.add(key);
-                }
-
-                renderPlaylist();
-            });
-        });
     }
 
     function addToPlaylist(id) {
@@ -1781,8 +1742,7 @@ def render_player_ranking(df, hist):
         const wasCurrent = idx === currentIndex;
 
         playlist.splice(idx, 1);
-        expandedPlaylistStyleIds.delete(String(id));
-
+        
         if (playlist.length === 0) {
             currentIndex = -1;
             audio.pause();
@@ -1857,7 +1817,6 @@ def render_player_ranking(df, hist):
                     ${thumb}
                     <div class="playlist-meta">
                         <div class="playlist-song-title">${escapeHtml(song.title)}</div>
-                        ${renderPlaylistStyleTags(song)}
                         <div class="playlist-song-sub">${escapeHtml(song.creator)} ${escapeHtml(song.handle || "")}</div>
                     </div>
                     <button class="remove-btn" data-action="remove-playlist" data-song-id="${escapeHtml(song.id)}">×</button>
@@ -1915,6 +1874,7 @@ def render_player_ranking(df, hist):
             nowCoverWrap.innerHTML = `<div class="now-placeholder">No track selected</div>`;
             nowTitle.textContent = "플레이리스트에 곡을 추가하세요";
             nowCreator.textContent = "앨범 이미지나 체크 버튼을 누르면 추가됩니다.";
+            nowStyleTags.innerHTML = "";
             lyricsPanel.textContent = "가사/프롬프트 정보가 있으면 여기에 표시됩니다.";
             lyricsPanel.classList.add("empty");
             playBtn.textContent = "▶";
@@ -1933,6 +1893,7 @@ def render_player_ranking(df, hist):
 
         nowTitle.textContent = song.title;
         nowCreator.textContent = `${song.creator || ""} ${song.handle || ""}`.trim();
+        nowStyleTags.innerHTML = renderNowStyleTags(song.style_tags);
 
         if (song.lyrics && song.lyrics.trim()) {
             lyricsPanel.textContent = song.lyrics;
@@ -2112,7 +2073,6 @@ def render_player_ranking(df, hist):
     clearBtn.addEventListener("click", () => {
         playlist = [];
         currentIndex = -1;
-        expandedPlaylistStyleIds = new Set();
         audio.pause();
         audio.removeAttribute("src");
         updateNowPlaying(null);
