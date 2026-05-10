@@ -561,3 +561,12 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+print(f"[final] db_rows={len(db)}")
+print(f"[final] db_csv_path={db_csv_path}")
+print(f"[final] db_zip_path=data/suno_song_db.zip")
+print(f"[final] db_zip_exists={os.path.exists('data/suno_song_db.zip')}")
+if os.path.exists("data/suno_song_db.zip"):
+    stat = os.stat("data/suno_song_db.zip")
+    print(f"[final] db_zip_size={stat.st_size}")
+    print(f"[final] db_zip_mtime_ns={stat.st_mtime_ns}")
