@@ -555,28 +555,100 @@ with tab1:
     render_top_table(view)
 
 with tab2:
+    st.subheader("현재 점수 공식")
+
+    formula_text = (
+        "base_score =\n"
+        f"  log1p(play_count) × {play_weight}\n"
+        f"+ log1p(upvote_count) × {like_weight}\n"
+        f"+ log1p(comment_count) × {comment_weight}\n\n"
+        "growth_score =\n"
+        f"  (\n"
+        f"    log1p(play_delta_{growth_window_hours}h) × 1.2\n"
+        f"  + log1p(upvote_delta_{growth_window_hours}h) × 5.0\n"
+        f"  + log1p(comment_delta_{growth_window_hours}h) × 8.0\n"
+        f"  ) × {growth_weight}\n\n"
+        "freshness =\n"
+        f"  max(0, 1 - age_hours / 96) ^ {freshness_power}\n\n"
+        "freshness_score =\n"
+        f"  freshness × {freshness_weight}\n\n"
+        "trend_score =\n"
+        "  base_score + growth_score + freshness_score"
+    )
+
+    st.code(formula_text, language="text")
+
     st.markdown(
-        f"""
-### 현재 점수 공식
+        """
+- `created_at`은 Suno에서 곡이 생성된 시각입니다.
+- `first_seen_at`은 수집기가 처음 발견한 시각입니다.
+- `last_checked_at`은 수집기가 마지막으로 곡 페이지를 확인한 시각입니다.
+- `growth_score`는 history CSV에 쌓인 기록을 사용합니다.
+"""
+    )
 
-```text
-base_score =
-  log1p(play_count) × {play_weight}
-+ log1p(upvote_count) × {like_weight}
-+ log1p(comment_count) × {comment_weight}
+    formula_cols = [
+        "rank",
+        "title",
+        "trend_score",
+        "base_score",
+        "growth_score",
+        "freshness_score",
+        "age_hours",
+        "play_delta_window",
+        "upvote_delta_window",
+        "comment_delta_window",
+    ]
 
-growth_score =
-  (
-    log1p(play_delta_{growth_window_hours}h) × 1.2
-  + log1p(upvote_delta_{growth_window_hours}h) × 5.0
-  + log1p(comment_delta_{growth_window_hours}h) × 8.0
-  ) × {growth_weight}
+    formula_cols = [c for c in formula_cols if c in view.columns]
 
-freshness =
-  max(0, 1 - age_hours / 96) ^ {freshness_power}
+    st.dataframe(
+        view[formula_cols],
+        use_container_width=True,
+        hide_index=True,
+    )
 
-freshness_score =
-  freshness × {freshness_weight}
 
-trend_score =
-  base_score + growth_score + freshness_score
+with tab3:
+    if hist.empty:
+        st.info("아직 history 데이터가 없습니다.")
+    else:
+        options = view[["id", "title", "handle"]].copy()
+        options["label"] = (
+            options["title"].fillna("(untitled)").astype(str)
+            + " — @"
+            + options["handle"].fillna("").astype(str)
+        )
+
+        if options.empty:
+            st.info("표시 중인 곡이 없습니다.")
+        else:
+            selected = st.selectbox(
+                "곡 선택",
+                options["label"].tolist(),
+            )
+
+            selected_id = options.loc[
+                options["label"] == selected,
+                "id"
+            ].iloc[0]
+
+            h = hist[hist["id"].astype(str) == str(selected_id)].copy()
+            h = h.sort_values("checked_at")
+
+            if h.empty:
+                st.info("선택한 곡의 history가 없습니다.")
+            else:
+                chart_cols = [
+                    c for c in ["play_count", "upvote_count", "comment_count"]
+                    if c in h.columns
+                ]
+
+                if chart_cols:
+                    st.line_chart(h.set_index("checked_at")[chart_cols])
+
+                st.dataframe(
+                    h,
+                    use_container_width=True,
+                    hide_index=True,
+                )
