@@ -63,9 +63,38 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+            - name: Install dependencies
         run: |
           pip install -r requirements.txt
+
+      - name: Load latest encrypted data from data branch
+        run: |
+          mkdir -p data
+
+          git fetch origin data || true
+
+          if git show-ref --verify --quiet refs/remotes/origin/data; then
+            echo "[data branch] Found origin/data. Loading latest encrypted ZIP files."
+
+            if git cat-file -e origin/data:data/suno_song_db.zip 2>/dev/null; then
+              git show origin/data:data/suno_song_db.zip > data/suno_song_db.zip
+              echo "[data branch] Loaded data/suno_song_db.zip"
+            else
+              echo "[data branch] data/suno_song_db.zip not found on data branch. Keeping existing file."
+            fi
+
+            if git cat-file -e origin/data:data/suno_song_history.zip 2>/dev/null; then
+              git show origin/data:data/suno_song_history.zip > data/suno_song_history.zip
+              echo "[data branch] Loaded data/suno_song_history.zip"
+            else
+              echo "[data branch] data/suno_song_history.zip not found on data branch. Keeping existing file."
+            fi
+          else
+            echo "[data branch] origin/data not found. Using ZIP files from main branch."
+          fi
+
+          echo "[data branch] Current encrypted files:"
+          ls -lh data/suno_song_db.zip data/suno_song_history.zip || true
 
       - name: Decrypt existing data
         env:
