@@ -1,6 +1,6 @@
 name: Fast Update Top 200
 
-on:
+"on":
   workflow_dispatch:
   schedule:
     - cron: "15,25,45,55 * * * *"
