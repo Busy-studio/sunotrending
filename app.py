@@ -799,9 +799,9 @@ def score_songs(
     )
 
     view["growth_score_raw"] = (
-        1.2 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 5.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 8.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+        0.4 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+        + 2.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+        + 3.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
     )
 
     view["growth_score"] = view["growth_score_raw"] * growth_weight
