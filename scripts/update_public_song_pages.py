@@ -422,6 +422,24 @@ def flatten_song(song, old_row=None, source="public"):
         "audio_url": audio_url,
         "image_url": image_url,
         "source": old_source,
+
+        # 랭킹 변동 계산용 기존 값 보존
+        "previous_rank": get_old_value(old_row, "previous_rank"),
+        "current_rank": get_old_value(old_row, "current_rank"),
+        "rank_change": get_old_value(old_row, "rank_change"),
+        "rank_status": get_old_value(old_row, "rank_status"),
+
+        # 댓글 품질 분석 값 보존
+        "adjusted_comment_count": get_old_value(old_row, "adjusted_comment_count"),
+        "effective_comment_count": get_old_value(old_row, "effective_comment_count"),
+        "comment_quality_ratio": get_old_value(old_row, "comment_quality_ratio"),
+        "analyzed_comment_count": get_old_value(old_row, "analyzed_comment_count"),
+        "meaningful_count": get_old_value(old_row, "meaningful_count"),
+        "generic_count": get_old_value(old_row, "generic_count"),
+        "mention_only_count": get_old_value(old_row, "mention_only_count"),
+        "emoji_only_count": get_old_value(old_row, "emoji_only_count"),
+        "comment_quality_summary": get_old_value(old_row, "comment_quality_summary"),
+        "comment_quality_checked_at": get_old_value(old_row, "comment_quality_checked_at"),
     }
 
 
@@ -512,7 +530,7 @@ def fetch_public_new_songs():
             logs.append(
                 f"[new_songs] page={page_idx + 1}, cursor={cursor}, "
                 f"page_size={NEW_SONGS_PAGE_SIZE}, raw_items={len(items)}, "
-                f"songs={len(page_songs)}, contest_excluded={contest_count}, "
+                f"songs={len(page_songs)}, contest_included={contest_count}, "
                 f"next_cursor={next_cursor}"
             )
 
