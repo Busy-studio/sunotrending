@@ -68,6 +68,21 @@ jobs:
         run: |
           python scripts/decrypt_data.py
 
+      - name: Debug CSV before update
+        run: |
+          echo "Before update:"
+          ls -lh data || true
+          python - <<'PY'
+          import os
+          import pandas as pd
+
+          for path in ["data/suno_song_db.csv", "data/suno_song_history.csv"]:
+              print(f"[before] {path} exists={os.path.exists(path)}")
+              if os.path.exists(path):
+                  df = pd.read_csv(path)
+                  print(f"[before] {path} rows={len(df)}")
+          PY
+
       - name: Full update public song pages
         if: steps.mode.outputs.mode == 'full'
         env:
@@ -95,11 +110,51 @@ jobs:
         run: |
           python scripts/update_top200_fast.py
 
+      - name: Validate CSV after update
+        run: |
+          echo "After update script:"
+          ls -lh data || true
+
+          python - <<'PY'
+          import os
+          import sys
+          import pandas as pd
+
+          db_path = "data/suno_song_db.csv"
+          hist_path = "data/suno_song_history.csv"
+
+          if not os.path.exists(db_path):
+              print(f"[ERROR] Missing {db_path}")
+              sys.exit(1)
+
+          db = pd.read_csv(db_path)
+          print(f"[after] {db_path} rows={len(db)}")
+
+          if os.path.exists(hist_path):
+              hist = pd.read_csv(hist_path)
+              print(f"[after] {hist_path} rows={len(hist)}")
+          else:
+              print(f"[after] {hist_path} missing")
+
+          # full 모드에서 신규곡 수집 후에도 206 그대로면 저장 실패로 간주
+          mode = "${{ steps.mode.outputs.mode }}"
+          if mode == "full" and len(db) <= 206:
+              print("[ERROR] Full update finished but DB CSV still has <= 206 rows.")
+              print("[ERROR] update_public_song_pages.py probably did not save the expanded DB to data/suno_song_db.csv.")
+              sys.exit(1)
+          PY
+
       - name: Encrypt data
         env:
           DATA_ZIP_PASSWORD: ${{ secrets.DATA_ZIP_PASSWORD }}
         run: |
           python scripts/encrypt_data.py
+
+      - name: Validate encrypted output changed
+        run: |
+          echo "After encrypt:"
+          ls -lh data/suno_song_db.zip data/suno_song_history.zip || true
+          git status --short
 
       - name: Remove plain CSV files
         run: |
@@ -111,7 +166,6 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          # 실행 중 main이 바뀌었는지 확인
           git fetch origin main
 
           LOCAL_HEAD=$(git rev-parse HEAD)
