@@ -1,12 +1,13 @@
 name: Update Suno Song Stats
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 on:
   workflow_dispatch:
   schedule:
     - cron: "*/30 * * * *"
+
+concurrency:
+  group: suno-data-update
+  cancel-in-progress: false
 
 permissions:
   contents: write
