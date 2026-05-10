@@ -341,24 +341,49 @@ def prepare_db(db):
         "lyrics",
         "prompt",
         "gpt_description_prompt",
-        "previous_rank",
-        "current_rank",
-        "rank_change",
+        "rank_status",
+        "comment_quality_summary",
     ]
 
     for col in text_cols:
         if col in db.columns:
             db[col] = db[col].apply(fix_mojibake)
 
-    for col in ["created_at", "first_seen_at", "last_checked_at"]:
+    for col in ["created_at", "first_seen_at", "last_checked_at", "comment_quality_checked_at"]:
         if col in db.columns:
             db[col] = pd.to_datetime(db[col], errors="coerce", utc=True)
 
-    for col in ["play_count", "upvote_count", "comment_count", "flag_count"]:
+    numeric_cols = [
+        "play_count",
+        "upvote_count",
+        "comment_count",
+        "flag_count",
+        "adjusted_comment_count",
+        "comment_quality_ratio",
+        "analyzed_comment_count",
+        "meaningful_count",
+        "generic_count",
+        "mention_only_count",
+        "emoji_only_count",
+        "previous_rank",
+        "current_rank",
+        "rank_change",
+    ]
+
+    for col in numeric_cols:
         if col in db.columns:
-            db[col] = pd.to_numeric(db[col], errors="coerce").fillna(0)
+            db[col] = pd.to_numeric(db[col], errors="coerce")
         else:
-            db[col] = 0
+            db[col] = pd.NA
+
+    for col in ["play_count", "upvote_count", "comment_count", "flag_count"]:
+        db[col] = db[col].fillna(0)
+
+    if "adjusted_comment_count" in db.columns:
+        db["adjusted_comment_count"] = db["adjusted_comment_count"].fillna(db["comment_count"])
+
+    if "comment_quality_ratio" in db.columns:
+        db["comment_quality_ratio"] = db["comment_quality_ratio"].fillna(1)
 
     if "id" in db.columns:
         db["id"] = db["id"].astype(str)
@@ -712,40 +737,44 @@ def build_song_payload(df):
         is_outlier = False if pd.isna(raw_outlier) else bool(raw_outlier)
 
         songs.append({
-            "rank": int(r.get("rank", 0)),
+            "rank": int(safe_float_or_none(r.get("rank", 0)) or 0),
             "rank_change": safe_float_or_none(r.get("rank_change", None)),
             "rank_status": safe_text(r.get("rank_status", "")),
             "previous_rank": safe_int_or_none(r.get("previous_rank", None)),
             "current_rank_saved": safe_int_or_none(r.get("current_rank", None)),
+
             "id": safe_text(r.get("id", "")),
             "title": safe_text(r.get("title", "Untitled")) or "Untitled",
             "creator": display_name,
             "handle": handle_text,
             "created_at": created_txt,
             "style_tags": safe_text(r.get("display_tags", "")),
-            "play_count": int(float(r.get("play_count", 0) or 0)),
-            "upvote_count": int(float(r.get("upvote_count", 0) or 0)),
-            "comment_count": int(float(r.get("comment_count", 0) or 0)),
-            "effective_comment_count": float(r.get("effective_comment_count", r.get("comment_count", 0)) or 0),
-            "adjusted_comment_count": float(r.get("adjusted_comment_count", r.get("comment_count", 0)) or 0),
-            "comment_quality_ratio": float(r.get("comment_quality_ratio", 1) or 1),
+
+            "play_count": int(safe_float_or_none(r.get("play_count", 0)) or 0),
+            "upvote_count": int(safe_float_or_none(r.get("upvote_count", 0)) or 0),
+            "comment_count": int(safe_float_or_none(r.get("comment_count", 0)) or 0),
+            "effective_comment_count": safe_float_or_none(r.get("effective_comment_count", r.get("comment_count", 0))) or 0,
+            "adjusted_comment_count": safe_float_or_none(r.get("adjusted_comment_count", r.get("comment_count", 0))) or 0,
+            "comment_quality_ratio": safe_float_or_none(r.get("comment_quality_ratio", 1)) or 1,
+
             "is_outlier": is_outlier,
             "outlier_reasons": safe_text(r.get("outlier_reasons", "")),
+
             "song_url": safe_url(r.get("song_url", "")),
             "audio_url": safe_url(r.get("audio_url", "")),
             "image_url": safe_url(r.get("image_url", "")),
             "lyrics": lyrics_text,
 
-            "trend_score": float(r.get("trend_score", 0) or 0),
-            "base_score": float(r.get("base_score", 0) or 0),
-            "growth_score": float(r.get("growth_score", 0) or 0),
-            "freshness_score": float(r.get("freshness_score", 0) or 0),
-            "growth_score_raw": float(r.get("growth_score_raw", 0) or 0),
-            "play_delta_window": float(r.get("play_delta_window", 0) or 0),
-            "upvote_delta_window": float(r.get("upvote_delta_window", 0) or 0),
-            "comment_delta_window": float(r.get("comment_delta_window", 0) or 0),
-            "freshness": float(r.get("freshness", 0) or 0),
-            "age_hours": float(r.get("age_hours", 0) or 0),
+            "trend_score": safe_float_or_none(r.get("trend_score", 0)) or 0,
+            "base_score": safe_float_or_none(r.get("base_score", 0)) or 0,
+            "growth_score": safe_float_or_none(r.get("growth_score", 0)) or 0,
+            "freshness_score": safe_float_or_none(r.get("freshness_score", 0)) or 0,
+            "growth_score_raw": safe_float_or_none(r.get("growth_score_raw", 0)) or 0,
+            "play_delta_window": safe_float_or_none(r.get("play_delta_window", 0)) or 0,
+            "upvote_delta_window": safe_float_or_none(r.get("upvote_delta_window", 0)) or 0,
+            "comment_delta_window": safe_float_or_none(r.get("comment_delta_window", 0)) or 0,
+            "freshness": safe_float_or_none(r.get("freshness", 0)) or 0,
+            "age_hours": safe_float_or_none(r.get("age_hours", 0)) or 0,
         })
 
     return songs
