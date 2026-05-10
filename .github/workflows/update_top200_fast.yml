@@ -3,7 +3,7 @@ name: Fast Update Top 200
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "15,25,45,55 * * * *"
 
 concurrency:
   group: suno-data-update
