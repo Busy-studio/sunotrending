@@ -2690,56 +2690,82 @@ with left_top:
     latest_created_txt = newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-"
     last_checked_txt = last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
 
-    st.markdown(
+    components.html(
         f"""
-<div style="margin-bottom: 6px;">
-    <div style="font-size: 20px; font-weight: 800; margin-bottom: 10px;">데이터 정보</div>
-
-    <div style="
-        display: grid;
-        grid-template-columns: 0.65fr 1.35fr 1.35fr;
-        gap: 12px;
-        align-items: stretch;
-    ">
         <div style="
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 12px 14px;
-            background: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            margin: 0;
+            padding: 0;
         ">
-            <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">DB 곡 수</div>
-            <div style="font-size: 22px; font-weight: 850; line-height: 1.15;">{total_songs:,}</div>
-        </div>
+            <div style="
+                font-size: 20px;
+                font-weight: 800;
+                margin-bottom: 10px;
+                color: #111827;
+            ">
+                데이터 정보
+            </div>
 
-        <div style="
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 12px 14px;
-            background: #ffffff;
-            overflow: hidden;
-        ">
-            <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">최신 생성곡</div>
-            <div style="font-size: 15px; font-weight: 800; line-height: 1.15; white-space: nowrap;">
-                {latest_created_txt}
+            <div style="
+                display: grid;
+                grid-template-columns: 0.65fr 1.35fr 1.35fr;
+                gap: 10px;
+                align-items: stretch;
+            ">
+                <div style="
+                    border: 1px solid #e5e7eb;
+                    border-radius: 14px;
+                    padding: 10px 12px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">DB 곡 수</div>
+                    <div style="font-size: 21px; font-weight: 850; line-height: 1.15; color: #111827;">
+                        {total_songs:,}
+                    </div>
+                </div>
+
+                <div style="
+                    border: 1px solid #e5e7eb;
+                    border-radius: 14px;
+                    padding: 10px 12px;
+                    background: #ffffff;
+                    overflow: hidden;
+                ">
+                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">최신 생성곡</div>
+                    <div style="
+                        font-size: 14px;
+                        font-weight: 800;
+                        line-height: 1.2;
+                        color: #111827;
+                        white-space: nowrap;
+                    ">
+                        {latest_created_txt}
+                    </div>
+                </div>
+
+                <div style="
+                    border: 1px solid #e5e7eb;
+                    border-radius: 14px;
+                    padding: 10px 12px;
+                    background: #ffffff;
+                    overflow: hidden;
+                ">
+                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">마지막 업데이트</div>
+                    <div style="
+                        font-size: 14px;
+                        font-weight: 800;
+                        line-height: 1.2;
+                        color: #111827;
+                        white-space: nowrap;
+                    ">
+                        {last_checked_txt}
+                    </div>
+                </div>
             </div>
         </div>
-
-        <div style="
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 12px 14px;
-            background: #ffffff;
-            overflow: hidden;
-        ">
-            <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">마지막 업데이트</div>
-            <div style="font-size: 15px; font-weight: 800; line-height: 1.15; white-space: nowrap;">
-                {last_checked_txt}
-            </div>
-        </div>
-    </div>
-</div>
         """,
-        unsafe_allow_html=True,
+        height=105,
+        scrolling=False,
     )
 
 with right_top:
