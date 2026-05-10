@@ -1,569 +1,3 @@
-import os
-import math
-import html
-import json
-import pandas as pd
-import streamlit as st
-import streamlit.components.v1 as components
-from scripts.secure_csv import decrypt_zip_to_file
-
-try:
-    import ftfy
-except Exception:
-    ftfy = None
-
-
-DB_ZIP_PATH = "data/suno_song_db.zip"
-HISTORY_ZIP_PATH = "data/suno_song_history.zip"
-DATA_DIR = "data"
-
-RETENTION_HOURS = 96  # 4일
-TOP_N = 200
-
-# 고정 랭킹 설정
-GROWTH_WINDOW_HOURS = 3
-MAX_AGE_DAYS = 4
-HIDE_CONTEST = True
-
-PLAY_WEIGHT = 1.0
-LIKE_WEIGHT = 3.0
-COMMENT_WEIGHT = 4.0
-GROWTH_WEIGHT = 2.5
-FRESHNESS_WEIGHT = 35.0
-FRESHNESS_POWER = 1.35
-
-
-st.set_page_config(
-    page_title="Suno Short-Term Trending",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-
-# ================================
-# Text helpers
-# ================================
-
-def broken_score(s: str) -> int:
-    if not s:
-        return 999999
-
-    bad_markers = [
-        "Ã", "ã", "Â", "â", "ð", "Ð", "Ñ", "Î", "Ï",
-        "ç", "è", "é", "ê", "ë", "í", "ì", "Å", "�",
-    ]
-
-    score = sum(s.count(ch) * 3 for ch in bad_markers)
-    score += sum(5 for ch in s if 0x80 <= ord(ch) <= 0x9F)
-    score += max(0, 8 - len(s))
-
-    return score
-
-
-def try_decode_utf8_from_latinish(s: str):
-    candidates = []
-
-    for enc in ["latin1", "cp1252"]:
-        try:
-            fixed = s.encode(enc, errors="strict").decode("utf-8", errors="strict")
-            if fixed:
-                candidates.append(fixed)
-        except Exception:
-            pass
-
-        try:
-            fixed = s.encode(enc, errors="ignore").decode("utf-8", errors="ignore")
-            if fixed:
-                candidates.append(fixed)
-        except Exception:
-            pass
-
-    return candidates
-
-
-def fix_mojibake(value):
-    if pd.isna(value):
-        return ""
-
-    original = str(value)
-
-    if not original:
-        return ""
-
-    candidates = [original]
-
-    if ftfy is not None:
-        try:
-            fixed = ftfy.fix_text(original)
-            if fixed and fixed not in candidates:
-                candidates.append(fixed)
-        except Exception:
-            pass
-
-    frontier = list(candidates)
-
-    for _ in range(3):
-        new_frontier = []
-
-        for s in frontier:
-            for fixed in try_decode_utf8_from_latinish(s):
-                if fixed and fixed not in candidates:
-                    candidates.append(fixed)
-                    new_frontier.append(fixed)
-
-            if ftfy is not None:
-                try:
-                    fixed = ftfy.fix_text(s)
-                    if fixed and fixed not in candidates:
-                        candidates.append(fixed)
-                        new_frontier.append(fixed)
-                except Exception:
-                    pass
-
-        frontier = new_frontier
-
-        if not frontier:
-            break
-
-    return min(candidates, key=broken_score)
-
-
-def safe_text(value):
-    if pd.isna(value):
-        return ""
-
-    s = fix_mojibake(value).strip()
-
-    if s.lower() in ["nan", "none"]:
-        return ""
-
-    return s
-
-
-def is_fake_rsc_token(value):
-    s = safe_text(value)
-
-    if not s:
-        return True
-
-    if s.startswith("$") and len(s) <= 8:
-        return True
-
-    return False
-
-
-def safe_url(value):
-    if pd.isna(value):
-        return ""
-
-    s = str(value).strip()
-
-    if s.lower() in ["nan", "none", ""]:
-        return ""
-
-    return s
-
-
-def fmt_int(value):
-    try:
-        if pd.isna(value):
-            return "0"
-        return f"{int(float(value)):,}"
-    except Exception:
-        return "0"
-
-
-def normalize_handle(value):
-    handle = safe_text(value)
-
-    if not handle:
-        return ""
-
-    if handle.startswith("@"):
-        handle = handle[1:]
-
-    return handle
-
-
-def build_creator_display(display_name_value, handle_value):
-    display_name = safe_text(display_name_value)
-    handle = normalize_handle(handle_value)
-
-    primary = display_name or handle or "-"
-    secondary = f"@{handle}" if handle else ""
-
-    return primary, secondary
-
-
-# ================================
-# Data loading
-# ================================
-
-@st.cache_data(ttl=300)
-def load_encrypted_data():
-    password = st.secrets.get("DATA_ZIP_PASSWORD")
-
-    if not password:
-        return None, None, "DATA_ZIP_PASSWORD가 Streamlit secrets에 없습니다."
-
-    db_csv_path = decrypt_zip_to_file(DB_ZIP_PATH, DATA_DIR, password)
-    hist_csv_path = decrypt_zip_to_file(HISTORY_ZIP_PATH, DATA_DIR, password)
-
-    if not db_csv_path or not os.path.exists(db_csv_path):
-        return None, None, "Encrypted DB ZIP was not found or could not be extracted."
-
-    db = pd.read_csv(db_csv_path)
-
-    if hist_csv_path and os.path.exists(hist_csv_path):
-        hist = pd.read_csv(hist_csv_path)
-    else:
-        hist = pd.DataFrame()
-
-    return db, hist, ""
-
-
-def prepare_db(db):
-    db = db.copy()
-
-    text_cols = [
-        "title",
-        "handle",
-        "display_name",
-        "model",
-        "display_tags",
-        "lyrics",
-        "prompt",
-        "gpt_description_prompt",
-    ]
-
-    for col in text_cols:
-        if col in db.columns:
-            db[col] = db[col].apply(fix_mojibake)
-
-    for col in ["created_at", "first_seen_at", "last_checked_at"]:
-        if col in db.columns:
-            db[col] = pd.to_datetime(db[col], errors="coerce", utc=True)
-
-    for col in ["play_count", "upvote_count", "comment_count", "flag_count"]:
-        if col in db.columns:
-            db[col] = pd.to_numeric(db[col], errors="coerce").fillna(0)
-        else:
-            db[col] = 0
-
-    if "id" in db.columns:
-        db["id"] = db["id"].astype(str)
-
-    if "song_url" not in db.columns and "id" in db.columns:
-        db["song_url"] = "https://suno.com/song/" + db["id"].astype(str)
-
-    return db
-
-
-def prepare_history(hist):
-    if hist is None or hist.empty:
-        return pd.DataFrame()
-
-    hist = hist.copy()
-
-    for col in ["title", "handle"]:
-        if col in hist.columns:
-            hist[col] = hist[col].apply(fix_mojibake)
-
-    if "checked_at" in hist.columns:
-        hist["checked_at"] = pd.to_datetime(hist["checked_at"], errors="coerce", utc=True)
-
-    if "created_at" in hist.columns:
-        hist["created_at"] = pd.to_datetime(hist["created_at"], errors="coerce", utc=True)
-
-    for col in ["play_count", "upvote_count", "comment_count", "flag_count"]:
-        if col in hist.columns:
-            hist[col] = pd.to_numeric(hist[col], errors="coerce").fillna(0)
-
-    if "id" in hist.columns:
-        hist["id"] = hist["id"].astype(str)
-
-    return hist
-
-
-# ================================
-# Ranking
-# ================================
-
-def add_growth_features(db, hist, window_hours):
-    db = db.copy()
-
-    for col in [
-        "play_delta_window",
-        "upvote_delta_window",
-        "comment_delta_window",
-        "play_velocity_per_hour",
-        "upvote_velocity_per_hour",
-        "comment_velocity_per_hour",
-    ]:
-        db[col] = 0.0
-
-    if hist.empty or "id" not in hist.columns or "checked_at" not in hist.columns:
-        return db
-
-    now = pd.Timestamp.now(tz="UTC")
-    cutoff = now - pd.Timedelta(hours=window_hours)
-
-    recent = hist[hist["checked_at"] >= cutoff].copy()
-
-    if recent.empty:
-        return db
-
-    agg_rows = []
-
-    for song_id, g in recent.groupby("id"):
-        g = g.sort_values("checked_at")
-
-        if len(g) < 2:
-            continue
-
-        first = g.iloc[0]
-        last = g.iloc[-1]
-
-        hours = (last["checked_at"] - first["checked_at"]).total_seconds() / 3600
-
-        if hours <= 0:
-            hours = max(window_hours, 1)
-
-        play_delta = max(0, float(last.get("play_count", 0)) - float(first.get("play_count", 0)))
-        upvote_delta = max(0, float(last.get("upvote_count", 0)) - float(first.get("upvote_count", 0)))
-        comment_delta = max(0, float(last.get("comment_count", 0)) - float(first.get("comment_count", 0)))
-
-        agg_rows.append({
-            "id": str(song_id),
-            "play_delta_window": play_delta,
-            "upvote_delta_window": upvote_delta,
-            "comment_delta_window": comment_delta,
-            "play_velocity_per_hour": play_delta / hours,
-            "upvote_velocity_per_hour": upvote_delta / hours,
-            "comment_velocity_per_hour": comment_delta / hours,
-        })
-
-    if not agg_rows:
-        return db
-
-    growth = pd.DataFrame(agg_rows)
-    db = db.merge(growth, on="id", how="left", suffixes=("", "_growth"))
-
-    for col in [
-        "play_delta_window",
-        "upvote_delta_window",
-        "comment_delta_window",
-        "play_velocity_per_hour",
-        "upvote_velocity_per_hour",
-        "comment_velocity_per_hour",
-    ]:
-        if col in db.columns:
-            db[col] = db[col].fillna(0)
-
-    return db
-
-
-def score_songs(
-    db,
-    hist,
-    play_weight,
-    like_weight,
-    comment_weight,
-    growth_weight,
-    freshness_weight,
-    growth_window_hours,
-    freshness_power,
-):
-    view = db.copy()
-
-    now = pd.Timestamp.now(tz="UTC")
-
-    if "created_at" not in view.columns:
-        view["created_at"] = pd.NaT
-
-    view["age_hours"] = (now - view["created_at"]).dt.total_seconds() / 3600
-    view["age_hours"] = view["age_hours"].clip(lower=0)
-
-    view["remaining_hours"] = (RETENTION_HOURS - view["age_hours"]).clip(lower=0)
-
-    view["freshness"] = (view["remaining_hours"] / RETENTION_HOURS).clip(lower=0, upper=1)
-    view["freshness_score"] = (view["freshness"] ** freshness_power) * freshness_weight
-
-    view = add_growth_features(view, hist, growth_window_hours)
-
-    for col in ["play_count", "upvote_count", "comment_count"]:
-        if col not in view.columns:
-            view[col] = 0
-        view[col] = pd.to_numeric(view[col], errors="coerce").fillna(0)
-
-    view["base_score"] = (
-        play_weight * view["play_count"].apply(lambda x: math.log1p(max(0, x)))
-        + like_weight * view["upvote_count"].apply(lambda x: math.log1p(max(0, x)))
-        + comment_weight * view["comment_count"].apply(lambda x: math.log1p(max(0, x)))
-    )
-
-    view["growth_score_raw"] = (
-        1.2 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 5.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 8.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-    )
-
-    view["growth_score"] = view["growth_score_raw"] * growth_weight
-
-    view["trend_score"] = (
-        view["base_score"]
-        + view["growth_score"]
-        + view["freshness_score"]
-    )
-
-    return view
-
-
-def filter_view(df):
-    view = df.copy()
-
-    if HIDE_CONTEST:
-        if "is_contest_clip" in view.columns:
-            view = view[view["is_contest_clip"].astype(str).str.lower() != "true"]
-
-        if "download_disabled_reason" in view.columns:
-            view = view[view["download_disabled_reason"].astype(str) != "remix_contest"]
-
-        if "contest_ids" in view.columns:
-            contest_str = view["contest_ids"].astype(str).str.strip().str.lower()
-            view = view[
-                view["contest_ids"].isna()
-                | (contest_str == "")
-                | (contest_str == "nan")
-                | (contest_str == "none")
-            ]
-
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=MAX_AGE_DAYS)
-
-    if "created_at" in view.columns:
-        view = view[view["created_at"].isna() | (view["created_at"] >= cutoff)]
-
-    return view
-
-
-# ================================
-# UI data
-# ================================
-
-def build_song_payload(df):
-    songs = []
-
-    for _, r in df.iterrows():
-        display_name, handle_text = build_creator_display(
-            r.get("display_name", ""),
-            r.get("handle", ""),
-        )
-
-        created_at = r.get("created_at")
-
-        if pd.notna(created_at):
-            created_txt = created_at.strftime("%Y-%m-%d %H:%M UTC")
-        else:
-            created_txt = "-"
-
-        lyrics_candidates = []
-
-        # display_tags는 장르/스타일 태그라서 가사 표시 후보에서는 제외
-        # 실제 가사/프롬프트 후보만 표시
-        for col in ["lyrics", "prompt", "gpt_description_prompt"]:
-            if col in r.index:
-                raw = r.get(col, "")
-
-                if is_fake_rsc_token(raw):
-                    continue
-
-                txt = safe_text(raw)
-
-                if txt:
-                    lyrics_candidates.append(txt)
-
-        lyrics_text = "\n\n".join(lyrics_candidates)
-
-        songs.append({
-            "rank": int(r.get("rank", 0)),
-            "id": safe_text(r.get("id", "")),
-            "title": safe_text(r.get("title", "Untitled")) or "Untitled",
-            "creator": display_name,
-            "handle": handle_text,
-            "created_at": created_txt,
-            "style_tags": safe_text(r.get("display_tags", "")),
-            "play_count": int(float(r.get("play_count", 0) or 0)),
-            "upvote_count": int(float(r.get("upvote_count", 0) or 0)),
-            "comment_count": int(float(r.get("comment_count", 0) or 0)),
-            "song_url": safe_url(r.get("song_url", "")),
-            "audio_url": safe_url(r.get("audio_url", "")),
-            "image_url": safe_url(r.get("image_url", "")),
-            "lyrics": lyrics_text,
-
-            # 상세정보용
-            "trend_score": float(r.get("trend_score", 0) or 0),
-            "base_score": float(r.get("base_score", 0) or 0),
-            "growth_score": float(r.get("growth_score", 0) or 0),
-            "freshness_score": float(r.get("freshness_score", 0) or 0),
-            "growth_score_raw": float(r.get("growth_score_raw", 0) or 0),
-            "play_delta_window": float(r.get("play_delta_window", 0) or 0),
-            "upvote_delta_window": float(r.get("upvote_delta_window", 0) or 0),
-            "comment_delta_window": float(r.get("comment_delta_window", 0) or 0),
-            "freshness": float(r.get("freshness", 0) or 0),
-            "age_hours": float(r.get("age_hours", 0) or 0),
-        })
-
-    return songs
-
-
-def build_history_payload(hist, song_ids):
-    if hist is None or hist.empty:
-        return {}
-
-    if "id" not in hist.columns or "checked_at" not in hist.columns:
-        return {}
-
-    h = hist.copy()
-    h["id"] = h["id"].astype(str)
-
-    song_id_set = set(str(x) for x in song_ids)
-    h = h[h["id"].isin(song_id_set)].copy()
-
-    if h.empty:
-        return {}
-
-    h = h.sort_values("checked_at")
-
-    result = {}
-
-    for song_id, g in h.groupby("id"):
-        rows = []
-        g = g.tail(80)
-
-        for _, r in g.iterrows():
-            checked_at = r.get("checked_at")
-
-            if pd.notna(checked_at):
-                checked_txt = checked_at.strftime("%m-%d %H:%M")
-            else:
-                checked_txt = "-"
-
-            rows.append({
-                "checked_at": checked_txt,
-                "play_count": int(float(r.get("play_count", 0) or 0)),
-                "upvote_count": int(float(r.get("upvote_count", 0) or 0)),
-                "comment_count": int(float(r.get("comment_count", 0) or 0)),
-            })
-
-        result[str(song_id)] = rows
-
-    return result
-
-
-# ================================
-# Player + ranking component
-# ================================
-
 def render_player_ranking(df, hist):
     songs = build_song_payload(df)
     histories = build_history_payload(hist, [s["id"] for s in songs])
@@ -1493,16 +927,6 @@ def render_player_ranking(df, hist):
             .replaceAll("'", "&#039;");
     }
 
-    function escapeJsString(text) {
-        if (text === null || text === undefined) return "";
-        return String(text)
-            .replaceAll("\\\\", "\\\\\\\\")
-            .replaceAll("'", "\\\\'")
-            .replaceAll('"', "\\\\\"")
-            .replaceAll("\\n", "\\\\n")
-            .replaceAll("\\r", "\\\\r");
-    }
-
     function formatInt(n) {
         try {
             return Number(n || 0).toLocaleString();
@@ -1588,36 +1012,17 @@ def render_player_ranking(df, hist):
         const expanded = expandedPlaylistStyleIds.has(id);
         const visibleTags = expanded ? tags : tags.slice(0, 2);
         const modeClass = expanded ? "expanded" : "collapsed";
-        const toggleText = expanded ? "접기" : `스타일 ${tags.length > 2 ? "+" + (tags.length - 2) : ""}`;
+        const toggleText = expanded ? "접기" : `스타일${tags.length > 2 ? " +" + (tags.length - 2) : ""}`;
 
         return `
             <div class="playlist-style-row">
-                <button class="playlist-style-toggle" onclick="togglePlaylistStyle('${escapeJsString(id)}', event)">${toggleText}</button>
+                <button class="playlist-style-toggle" data-action="toggle-playlist-style" data-song-id="${escapeHtml(id)}">${toggleText}</button>
                 <div class="playlist-style-tags ${modeClass}">
                     ${visibleTags.map(tag => `<span class="playlist-style-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join("")}
                 </div>
             </div>
         `;
     }
-
-    function togglePlaylistStyle(id, event) {
-        if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-        }
-
-        const key = String(id);
-
-        if (expandedPlaylistStyleIds.has(key)) {
-            expandedPlaylistStyleIds.delete(key);
-        } else {
-            expandedPlaylistStyleIds.add(key);
-        }
-
-        renderPlaylist();
-    }
-
-    window.togglePlaylistStyle = togglePlaylistStyle;
 
     function getCurrentSong() {
         if (currentIndex < 0 || currentIndex >= playlist.length) return null;
@@ -1743,6 +1148,40 @@ def render_player_ranking(df, hist):
         });
     }
 
+    function bindPlaylistEvents() {
+        playlistEl.querySelectorAll("[data-action='play-playlist-index']").forEach(item => {
+            item.addEventListener("click", event => {
+                event.preventDefault();
+                playPlaylistIndex(Number(item.dataset.index));
+            });
+        });
+
+        playlistEl.querySelectorAll("[data-action='remove-playlist']").forEach(btn => {
+            btn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                removeFromPlaylistById(btn.dataset.songId);
+            });
+        });
+
+        playlistEl.querySelectorAll("[data-action='toggle-playlist-style']").forEach(btn => {
+            btn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+
+                const key = String(btn.dataset.songId);
+
+                if (expandedPlaylistStyleIds.has(key)) {
+                    expandedPlaylistStyleIds.delete(key);
+                } else {
+                    expandedPlaylistStyleIds.add(key);
+                }
+
+                renderPlaylist();
+            });
+        });
+    }
+
     function addToPlaylist(id) {
         const song = getSongById(id);
 
@@ -1828,13 +1267,6 @@ def render_player_ranking(df, hist):
         }
     }
 
-    function removeFromPlaylist(id, event) {
-        if (event) event.stopPropagation();
-        removeFromPlaylistById(id);
-    }
-
-    window.removeFromPlaylist = removeFromPlaylist;
-
     function renderPlaylist() {
         playlistCount.textContent = `${playlist.length} tracks`;
 
@@ -1855,17 +1287,19 @@ def render_player_ranking(df, hist):
                 : `<div class="playlist-thumb"></div>`;
 
             return `
-                <div class="playlist-item ${active}" onclick="playPlaylistIndex(${idx})">
+                <div class="playlist-item ${active}" data-action="play-playlist-index" data-index="${idx}">
                     ${thumb}
                     <div class="playlist-meta">
                         <div class="playlist-song-title">${escapeHtml(song.title)}</div>
                         ${renderPlaylistStyleTags(song)}
                         <div class="playlist-song-sub">${escapeHtml(song.creator)} ${escapeHtml(song.handle || "")}</div>
                     </div>
-                    <button class="remove-btn" onclick="removeFromPlaylist('${escapeJsString(song.id)}', event)">×</button>
+                    <button class="remove-btn" data-action="remove-playlist" data-song-id="${escapeHtml(song.id)}">×</button>
                 </div>
             `;
         }).join("");
+
+        bindPlaylistEvents();
     }
 
     function refreshButtonsAndCovers() {
@@ -1909,8 +1343,6 @@ def render_player_ranking(df, hist):
             loadCurrent(true);
         }
     }
-
-    window.playPlaylistIndex = playPlaylistIndex;
 
     function updateNowPlaying(song) {
         if (!song) {
@@ -2182,8 +1614,6 @@ def render_player_ranking(df, hist):
         drawHistoryChart(id);
     }
 
-    window.openRankingInfo = openRankingInfo;
-
     function drawHistoryChart(id) {
         const ctx = historyCanvas.getContext("2d");
         const w = historyCanvas.width;
@@ -2296,55 +1726,3 @@ def render_player_ranking(df, hist):
         height=1500,
         scrolling=True,
     )
-
-
-# ================================
-# Main
-# ================================
-
-st.title("Suno Short-Term Trending")
-st.caption("최근 4일 생성곡 기준 · 누적 반응 + 최근 변화량 + 신선도 반영")
-
-raw_db, raw_hist, error = load_encrypted_data()
-
-if error:
-    st.error(error)
-    st.stop()
-
-if raw_db is None or raw_db.empty:
-    st.warning("DB가 비어 있습니다. GitHub Actions가 신규곡을 수집한 뒤 다시 확인하세요.")
-    st.stop()
-
-db = prepare_db(raw_db)
-hist = prepare_history(raw_hist)
-
-scored = score_songs(
-    db=db,
-    hist=hist,
-    play_weight=PLAY_WEIGHT,
-    like_weight=LIKE_WEIGHT,
-    comment_weight=COMMENT_WEIGHT,
-    growth_weight=GROWTH_WEIGHT,
-    freshness_weight=FRESHNESS_WEIGHT,
-    growth_window_hours=GROWTH_WINDOW_HOURS,
-    freshness_power=FRESHNESS_POWER,
-)
-
-view = filter_view(scored)
-
-view = view.sort_values("trend_score", ascending=False, na_position="last").head(TOP_N).copy()
-view = view.reset_index(drop=True)
-view.insert(0, "rank", range(1, len(view) + 1))
-
-total_songs = len(db)
-last_checked = db["last_checked_at"].max() if "last_checked_at" in db.columns else pd.NaT
-newest_created = db["created_at"].max() if "created_at" in db.columns else pd.NaT
-
-m1, m2, m3 = st.columns(3)
-m1.metric("DB 곡 수", f"{total_songs:,}")
-m2.metric("최신 생성곡", newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-")
-m3.metric("마지막 업데이트", last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-")
-
-st.divider()
-
-render_player_ranking(view, hist)
