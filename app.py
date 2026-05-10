@@ -2696,75 +2696,69 @@ with left_top:
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             margin: 0;
             padding: 0;
+            width: 100%;
         ">
             <div style="
-                font-size: 20px;
-                font-weight: 800;
-                margin-bottom: 10px;
+                font-size: 22px;
+                font-weight: 850;
+                margin-bottom: 12px;
                 color: #111827;
+                line-height: 1.2;
             ">
                 데이터 정보
             </div>
 
             <div style="
-                display: grid;
-                grid-template-columns: 0.65fr 1.35fr 1.35fr;
-                gap: 10px;
-                align-items: stretch;
+                border: 1px solid #e5e7eb;
+                border-radius: 14px;
+                background: #ffffff;
+                overflow: hidden;
+                width: 100%;
             ">
                 <div style="
-                    border: 1px solid #e5e7eb;
-                    border-radius: 14px;
+                    display: grid;
+                    grid-template-columns: 110px 1fr;
+                    gap: 10px;
+                    align-items: center;
                     padding: 10px 12px;
-                    background: #ffffff;
+                    border-bottom: 1px solid #eef2f7;
                 ">
-                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">DB 곡 수</div>
-                    <div style="font-size: 21px; font-weight: 850; line-height: 1.15; color: #111827;">
+                    <div style="font-size: 12px; color: #6b7280; font-weight: 700;">DB 곡 수</div>
+                    <div style="font-size: 18px; color: #111827; font-weight: 850; text-align: right;">
                         {total_songs:,}
                     </div>
                 </div>
 
                 <div style="
-                    border: 1px solid #e5e7eb;
-                    border-radius: 14px;
+                    display: grid;
+                    grid-template-columns: 110px 1fr;
+                    gap: 10px;
+                    align-items: center;
                     padding: 10px 12px;
-                    background: #ffffff;
-                    overflow: hidden;
+                    border-bottom: 1px solid #eef2f7;
                 ">
-                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">최신 생성곡</div>
-                    <div style="
-                        font-size: 14px;
-                        font-weight: 800;
-                        line-height: 1.2;
-                        color: #111827;
-                        white-space: nowrap;
-                    ">
+                    <div style="font-size: 12px; color: #6b7280; font-weight: 700;">최신 생성곡</div>
+                    <div style="font-size: 14px; color: #111827; font-weight: 800; text-align: right; white-space: nowrap;">
                         {latest_created_txt}
                     </div>
                 </div>
 
                 <div style="
-                    border: 1px solid #e5e7eb;
-                    border-radius: 14px;
+                    display: grid;
+                    grid-template-columns: 110px 1fr;
+                    gap: 10px;
+                    align-items: center;
                     padding: 10px 12px;
-                    background: #ffffff;
-                    overflow: hidden;
                 ">
-                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">마지막 업데이트</div>
-                    <div style="
-                        font-size: 14px;
-                        font-weight: 800;
-                        line-height: 1.2;
-                        color: #111827;
-                        white-space: nowrap;
-                    ">
+                    <div style="font-size: 12px; color: #6b7280; font-weight: 700;">마지막 업데이트</div>
+                    <div style="font-size: 14px; color: #111827; font-weight: 800; text-align: right; white-space: nowrap;">
                         {last_checked_txt}
                     </div>
                 </div>
             </div>
         </div>
         """,
-        height=105,
+        height=155,
         scrolling=False,
     )
 
