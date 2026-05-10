@@ -1899,9 +1899,9 @@ def render_player_ranking(df, hist):
     let playbackMode = "sequence";
 
     let sortState = {
-    key: null,
-    direction: null,
-};
+        key: null,
+        direction: null,
+    };
 
     const nowCoverWrap = document.getElementById("nowCoverWrap");
     const nowTitle = document.getElementById("nowTitle");
