@@ -2734,7 +2734,7 @@ def render_player_ranking(df, hist):
 # Main
 # ================================
 
-st.title("Suno Trending v1.01")
+st.title("Suno Trending v1.02")
 st.caption("최근 4일 생성곡 기준으로 누적 반응,  최근 변화량 등 반영")
 
 if st.button("데이터 새로고침"):
@@ -2828,7 +2828,7 @@ with right_top:
     st.markdown("### 수동 곡 추가")
 
     with st.container(border=True):
-        with st.form("manual_add_song_form", clear_on_submit=False):
+        with st.form("manual_add_song_form", clear_on_submit=True):
             manual_suno_url = st.text_input(
                 "Suno song link",
                 placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
