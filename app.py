@@ -3,6 +3,7 @@ import math
 import html
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from scripts.secure_csv import decrypt_zip_to_file
 
 DB_ZIP_PATH = "data/suno_song_db.zip"
@@ -38,19 +39,34 @@ def fix_mojibake(value):
         return ""
 
     # 흔한 mojibake 패턴
-    markers = ["Ã", "ã", "è", "é", "ê", "ë", "å", "ä", "Â", "Ð", "Ñ", "ç", "µ", "„", "”"]
+    markers = [
+        "Ã", "ã", "è", "é", "ê", "ë", "å", "ä", "Â",
+        "Ð", "Ñ", "ç", "µ", "„", "”", "â", "ð", "", "", "Å"
+    ]
+
     if not any(m in s for m in markers):
         return s
 
-    try:
-        fixed = s.encode("latin1").decode("utf-8")
-        # 보정 후에도 이상하면 원본 유지
-        if fixed and fixed != s:
-            return fixed
-    except Exception:
-        pass
+    candidates = [s]
 
-    return s
+    # 흔한 latin1/utf-8 깨짐 복구
+    for enc in ["latin1", "cp1252"]:
+        try:
+            fixed = s.encode(enc, errors="ignore").decode("utf-8", errors="ignore")
+            if fixed and fixed not in candidates:
+                candidates.append(fixed)
+        except Exception:
+            pass
+
+    # 가장 덜 깨져 보이는 후보 선택
+    bad_chars = ["Ã", "ã", "Â", "â", "ð", "", "", "�", "Å"]
+
+    def bad_score(x):
+        return sum(x.count(ch) for ch in bad_chars)
+
+    best = min(candidates, key=bad_score)
+
+    return best or s
 
 
 def esc(value):
@@ -79,7 +95,7 @@ def safe_url(value):
     if pd.isna(value):
         return ""
     s = str(value).strip()
-    if s.lower() == "nan":
+    if s.lower() in ["nan", "none", ""]:
         return ""
     return s
 
@@ -223,7 +239,6 @@ def add_growth_features(db, hist, window_hours):
         return db
 
     growth = pd.DataFrame(agg_rows)
-
     db = db.merge(growth, on="id", how="left", suffixes=("", "_growth"))
 
     for col in [
@@ -268,7 +283,11 @@ def score_songs(
 
     view = add_growth_features(view, hist, growth_window_hours)
 
-    # 로그 압축: 큰 곡이 너무 압도하지 않도록
+    for col in ["play_count", "upvote_count", "comment_count"]:
+        if col not in view.columns:
+            view[col] = 0
+        view[col] = pd.to_numeric(view[col], errors="coerce").fillna(0)
+
     view["base_score"] = (
         play_weight * view["play_count"].apply(lambda x: math.log1p(max(0, x)))
         + like_weight * view["upvote_count"].apply(lambda x: math.log1p(max(0, x)))
@@ -337,71 +356,121 @@ def filter_view(df, keyword, hide_contest, max_age_days):
 # ================================
 
 def render_top_table(df):
-    st.markdown(
-        """
-        <style>
-        html, body, [class*="css"] {
-            font-family: "Inter", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic",
-                         "Segoe UI", Arial, sans-serif;
-        }
-        .song-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 14px;
-        }
-        .song-table th {
-            text-align: left;
-            padding: 10px 8px;
-            border-bottom: 1px solid rgba(128,128,128,0.35);
-            position: sticky;
-            top: 0;
-            background: var(--background-color);
-            z-index: 1;
-        }
-        .song-table td {
-            padding: 8px;
-            border-bottom: 1px solid rgba(128,128,128,0.18);
-            vertical-align: middle;
-        }
-        .song-table tr:hover {
-            background: rgba(128,128,128,0.08);
-        }
-        .cover {
-            width: 54px;
-            height: 54px;
-            object-fit: cover;
-            border-radius: 10px;
-            background: rgba(128,128,128,0.18);
-        }
-        .rank {
-            font-weight: 700;
-            font-size: 16px;
-            text-align: right;
-            width: 44px;
-        }
-        .title-link {
-            font-weight: 700;
-            text-decoration: none;
-        }
-        .subtle {
-            opacity: 0.72;
-            font-size: 12px;
-            margin-top: 3px;
-        }
-        .num {
-            text-align: right;
-            white-space: nowrap;
-            font-variant-numeric: tabular-nums;
-        }
-        .score {
-            font-weight: 700;
-            text-align: right;
-            white-space: nowrap;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    css = """
+    <style>
+    html, body {
+        margin: 0;
+        padding: 0;
+        font-family: "Inter", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic",
+                     "Segoe UI", Arial, sans-serif;
+        background: transparent;
+        color: #fafafa;
+    }
+
+    .table-wrap {
+        width: 100%;
+        overflow-x: auto;
+        background: transparent;
+    }
+
+    table.song-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+        table-layout: fixed;
+    }
+
+    .song-table th {
+        text-align: left;
+        padding: 11px 8px;
+        border-bottom: 1px solid rgba(160,160,160,0.35);
+        background: rgba(120,120,120,0.16);
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        font-weight: 700;
+        color: #fafafa;
+    }
+
+    .song-table td {
+        padding: 8px;
+        border-bottom: 1px solid rgba(160,160,160,0.16);
+        vertical-align: middle;
+        color: #fafafa;
+    }
+
+    .song-table tr:hover {
+        background: rgba(160,160,160,0.10);
+    }
+
+    .rank {
+        font-weight: 800;
+        font-size: 16px;
+        text-align: right;
+        width: 44px;
+    }
+
+    .cover {
+        width: 56px;
+        height: 56px;
+        object-fit: cover;
+        border-radius: 10px;
+        background: rgba(160,160,160,0.18);
+        display: block;
+    }
+
+    .empty-cover {
+        width: 56px;
+        height: 56px;
+        border-radius: 10px;
+        background: rgba(160,160,160,0.18);
+    }
+
+    .title-cell {
+        overflow: hidden;
+        word-break: break-word;
+    }
+
+    .title-link {
+        font-weight: 800;
+        text-decoration: none;
+        color: #ffffff;
+        display: inline-block;
+        max-width: 100%;
+        white-space: normal;
+        line-height: 1.35;
+    }
+
+    .title-link:hover {
+        text-decoration: underline;
+    }
+
+    .subtle {
+        opacity: 0.70;
+        font-size: 12px;
+        margin-top: 4px;
+        line-height: 1.25;
+    }
+
+    .creator {
+        line-height: 1.35;
+        word-break: break-word;
+    }
+
+    .num {
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .score {
+        font-weight: 800;
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+    }
+    </style>
+    """
 
     rows = []
 
@@ -414,7 +483,7 @@ def render_top_table(df):
 
         creator = display_name or handle
         if handle and display_name and handle.lower() not in display_name.lower():
-            creator = f"{display_name} <span class='subtle'>@{handle}</span>"
+            creator = f"{display_name}<div class='subtle'>@{handle}</div>"
         elif handle:
             creator = f"@{handle}"
 
@@ -427,10 +496,13 @@ def render_top_table(df):
         if image:
             img_html = f"<img class='cover' src='{html.escape(image)}' loading='lazy'>"
         else:
-            img_html = "<div class='cover'></div>"
+            img_html = "<div class='empty-cover'></div>"
 
         if song_url:
-            title_html = f"<a class='title-link' href='{html.escape(song_url)}' target='_blank' rel='noopener noreferrer'>{title}</a>"
+            title_html = (
+                f"<a class='title-link' href='{html.escape(song_url)}' "
+                f"target='_blank' rel='noopener noreferrer'>{title}</a>"
+            )
         else:
             title_html = title
 
@@ -439,11 +511,11 @@ def render_top_table(df):
             <tr>
                 <td class="rank">{int(r.get("rank", 0))}</td>
                 <td>{img_html}</td>
-                <td>
+                <td class="title-cell">
                     {title_html}
                     <div class="subtle">{created_txt}</div>
                 </td>
-                <td>{creator}</td>
+                <td class="creator">{creator}</td>
                 <td class="num">{fmt_int(r.get("play_count", 0))}</td>
                 <td class="num">{fmt_int(r.get("upvote_count", 0))}</td>
                 <td class="num">{fmt_int(r.get("comment_count", 0))}</td>
@@ -452,27 +524,36 @@ def render_top_table(df):
             """
         )
 
-    table = f"""
-    <table class="song-table">
-        <thead>
-            <tr>
-                <th style="width:44px;">순위</th>
-                <th style="width:70px;">앨범</th>
-                <th>곡 제목</th>
-                <th>원작자</th>
-                <th style="text-align:right;">플레이</th>
-                <th style="text-align:right;">좋아요</th>
-                <th style="text-align:right;">댓글</th>
-                <th style="text-align:right;">점수</th>
-            </tr>
-        </thead>
-        <tbody>
-            {''.join(rows)}
-        </tbody>
-    </table>
+    table_html = f"""
+    {css}
+    <div class="table-wrap">
+        <table class="song-table">
+            <thead>
+                <tr>
+                    <th style="width:44px; text-align:right;">순위</th>
+                    <th style="width:72px;">앨범</th>
+                    <th>곡 제목</th>
+                    <th style="width:190px;">원작자</th>
+                    <th style="width:90px; text-align:right;">플레이</th>
+                    <th style="width:90px; text-align:right;">좋아요</th>
+                    <th style="width:80px; text-align:right;">댓글</th>
+                    <th style="width:90px; text-align:right;">점수</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(rows)}
+            </tbody>
+        </table>
+    </div>
     """
 
-    st.markdown(table, unsafe_allow_html=True)
+    height = min(12000, max(600, 92 + len(df) * 74))
+
+    components.html(
+        table_html,
+        height=height,
+        scrolling=True,
+    )
 
 
 # ================================
@@ -480,7 +561,7 @@ def render_top_table(df):
 # ================================
 
 st.title("Suno Short-Term Trending")
-st.caption("최근 4일 생성곡 기준 · 30분 단위 업데이트 · 누적 반응 + 최근 변화량 + 신선도 점수")
+st.caption("최근 4일 생성곡 기준 · 30분/15분 단위 업데이트 · 누적 반응 + 최근 변화량 + 신선도 점수")
 
 raw_db, raw_hist, error = load_encrypted_data()
 
