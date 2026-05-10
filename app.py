@@ -2187,7 +2187,7 @@ function cycleSort(key) {
         audio.volume = v;
     }
 
-        function renderTable(filterText = "") {
+    function renderTable(filterText = "") {
         const q = String(filterText || "").trim().toLowerCase();
 
         let filtered = songs.filter(song => {
