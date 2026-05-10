@@ -43,7 +43,7 @@ HIDE_CONTEST = True
 PLAY_WEIGHT = 1.0
 LIKE_WEIGHT = 3.0
 COMMENT_WEIGHT = 4.0
-GROWTH_WEIGHT = 2.5
+GROWTH_WEIGHT = 1.5
 FRESHNESS_WEIGHT = 35.0
 FRESHNESS_POWER = 1.35
 
@@ -585,8 +585,6 @@ def score_songs(
         + 2.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
         + 3.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
     )
-
-view["growth_score"] = view["growth_score_raw"] * growth_weight
 
     view["growth_score"] = view["growth_score_raw"] * growth_weight
 
