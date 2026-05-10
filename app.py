@@ -194,8 +194,24 @@ def build_creator_display(display_name_value, handle_value):
 # Data loading
 # ================================
 
-@st.cache_data(ttl=300)
-def load_encrypted_data():
+def file_fingerprint(path):
+    if not os.path.exists(path):
+        return {
+            "exists": False,
+            "mtime_ns": 0,
+            "size": 0,
+        }
+
+    stat = os.stat(path)
+
+    return {
+        "exists": True,
+        "mtime_ns": stat.st_mtime_ns,
+        "size": stat.st_size,
+    }
+
+@st.cache_data(ttl=60)
+def load_encrypted_data(db_fingerprint, history_fingerprint):
     password = st.secrets.get("DATA_ZIP_PASSWORD")
 
     if not password:
@@ -2273,7 +2289,17 @@ def render_player_ranking(df, hist):
 st.title("Suno Trending v1.0")
 st.caption("최근 4일 생성곡 기준으로 누적 반응,  최근 변화량 등 반영")
 
-raw_db, raw_hist, error = load_encrypted_data()
+if st.button("데이터 새로고침"):
+    st.cache_data.clear()
+    st.rerun()
+
+db_fingerprint = file_fingerprint(DB_ZIP_PATH)
+history_fingerprint = file_fingerprint(HISTORY_ZIP_PATH)
+
+raw_db, raw_hist, error = load_encrypted_data(
+    db_fingerprint,
+    history_fingerprint,
+)
 
 if error:
     st.error(error)
