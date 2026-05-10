@@ -17,13 +17,25 @@ HISTORY_ZIP_PATH = "data/suno_song_history.zip"
 DATA_DIR = "data"
 
 RETENTION_HOURS = 96  # 4일
-TOP_N_DEFAULT = 200
+TOP_N = 200
+
+# 고정 랭킹 설정
+GROWTH_WINDOW_HOURS = 3
+MAX_AGE_DAYS = 4
+HIDE_CONTEST = True
+
+PLAY_WEIGHT = 1.0
+LIKE_WEIGHT = 3.0
+COMMENT_WEIGHT = 4.0
+GROWTH_WEIGHT = 2.5
+FRESHNESS_WEIGHT = 35.0
+FRESHNESS_POWER = 1.35
 
 
 st.set_page_config(
     page_title="Suno Short-Term Trending",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -31,53 +43,120 @@ st.set_page_config(
 # Text / encoding helpers
 # ================================
 
+def looks_broken(s: str) -> bool:
+    if not s:
+        return False
+
+    markers = [
+        "Ã", "ã", "Â", "â", "ð", "Ð", "Ñ", "Î", "Ï",
+        "ç", "è", "é", "ê", "ë", "í", "ì", "Å", "�",
+        "\x80", "\x81", "\x82", "\x83", "\x84", "\x85", "\x86", "\x87",
+        "\x88", "\x89", "\x8a", "\x8b", "\x8c", "\x8d", "\x8e", "\x8f",
+        "\x90", "\x91", "\x92", "\x93", "\x94", "\x95", "\x96", "\x97",
+        "\x98", "\x99", "\x9a", "\x9b", "\x9c", "\x9d", "\x9e", "\x9f",
+    ]
+
+    return any(m in s for m in markers)
+
+
+def broken_score(s: str) -> int:
+    if not s:
+        return 999999
+
+    bad_markers = [
+        "Ã", "ã", "Â", "â", "ð", "Ð", "Ñ", "Î", "Ï",
+        "ç", "è", "é", "ê", "ë", "í", "ì", "Å", "�",
+    ]
+
+    score = sum(s.count(ch) * 3 for ch in bad_markers)
+
+    # C1 control characters
+    score += sum(5 for ch in s if 0x80 <= ord(ch) <= 0x9F)
+
+    # 너무 많이 사라진 후보 방지
+    score += max(0, 8 - len(s))
+
+    return score
+
+
+def try_decode_utf8_from_latinish(s: str):
+    candidates = []
+
+    for enc in ["latin1", "cp1252"]:
+        try:
+            fixed = s.encode(enc, errors="strict").decode("utf-8", errors="strict")
+            if fixed:
+                candidates.append(fixed)
+        except Exception:
+            pass
+
+        try:
+            fixed = s.encode(enc, errors="ignore").decode("utf-8", errors="ignore")
+            if fixed:
+                candidates.append(fixed)
+        except Exception:
+            pass
+
+    return candidates
+
+
 def fix_mojibake(value):
     """
-    깨진 UTF-8/라틴 문자 복구.
-    예: WesoÅy → Wesoły, â → “, ð... → emoji 계열 복구 시도
+    UTF-8이 Latin-1/CP1252로 잘못 읽힌 문자열을 복구.
+    예:
+    - ÐÐ¾Ð»Ð¾Ð´Ð¾Ð¹ → Молодой
+    - ç»ç → 玻璃
+    - íëë → 하나님
+    - âElectricâ → “Electric”
     """
     if pd.isna(value):
         return ""
 
-    s = str(value)
+    original = str(value)
 
-    if not s:
+    if not original:
         return ""
 
-    # 1차: ftfy 사용
+    candidates = [original]
+
+    # ftfy 1차 복구
     if ftfy is not None:
         try:
-            fixed = ftfy.fix_text(s)
-            if fixed:
-                s = fixed
+            fixed = ftfy.fix_text(original)
+            if fixed and fixed not in candidates:
+                candidates.append(fixed)
         except Exception:
             pass
 
-    # 2차: 흔한 latin1/cp1252 깨짐 복구
-    markers = [
-        "Ã", "ã", "è", "é", "ê", "ë", "å", "ä", "Â",
-        "Ð", "Ñ", "ç", "µ", "„", "”", "â", "ð", "Å", "�"
-    ]
+    # 직접 복구, 최대 3회 반복
+    frontier = list(candidates)
 
-    if any(m in s for m in markers):
-        candidates = [s]
+    for _ in range(3):
+        new_frontier = []
 
-        for enc in ["latin1", "cp1252"]:
-            try:
-                fixed = s.encode(enc, errors="ignore").decode("utf-8", errors="ignore")
+        for s in frontier:
+            for fixed in try_decode_utf8_from_latinish(s):
                 if fixed and fixed not in candidates:
                     candidates.append(fixed)
-            except Exception:
-                pass
+                    new_frontier.append(fixed)
 
-        bad_chars = ["Ã", "ã", "Â", "â", "ð", "�", "Å"]
+            if ftfy is not None:
+                try:
+                    fixed = ftfy.fix_text(s)
+                    if fixed and fixed not in candidates:
+                        candidates.append(fixed)
+                        new_frontier.append(fixed)
+                except Exception:
+                    pass
 
-        def bad_score(x):
-            return sum(x.count(ch) for ch in bad_chars)
+        frontier = new_frontier
 
-        s = min(candidates, key=bad_score)
+        if not frontier:
+            break
 
-    return s
+    best = min(candidates, key=broken_score)
+
+    return best
 
 
 def esc(value):
@@ -229,6 +308,7 @@ def add_growth_features(db, hist, window_hours):
         last = g.iloc[-1]
 
         hours = (last["checked_at"] - first["checked_at"]).total_seconds() / 3600
+
         if hours <= 0:
             hours = max(window_hours, 1)
 
@@ -326,20 +406,10 @@ def score_songs(
 # Filtering
 # ================================
 
-def filter_view(df, keyword, hide_contest, max_age_days):
+def filter_view(df):
     view = df.copy()
 
-    if keyword.strip():
-        k = keyword.strip().lower()
-        mask = pd.Series(False, index=view.index)
-
-        for col in ["title", "handle", "display_name"]:
-            if col in view.columns:
-                mask = mask | view[col].astype(str).str.lower().str.contains(k, na=False)
-
-        view = view[mask]
-
-    if hide_contest:
+    if HIDE_CONTEST:
         if "is_contest_clip" in view.columns:
             view = view[view["is_contest_clip"].astype(str).str.lower() != "true"]
 
@@ -355,8 +425,8 @@ def filter_view(df, keyword, hide_contest, max_age_days):
                 | (contest_str == "none")
             ]
 
-    if max_age_days and "created_at" in view.columns:
-        cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=max_age_days)
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=MAX_AGE_DAYS)
+    if "created_at" in view.columns:
         view = view[view["created_at"].isna() | (view["created_at"] >= cutoff)]
 
     return view
@@ -685,7 +755,7 @@ def render_top_table(df):
 # ================================
 
 st.title("Suno Short-Term Trending")
-st.caption("최근 4일 생성곡 기준 · 30분/15분 단위 업데이트 · 누적 반응 + 최근 변화량 + 신선도 점수")
+st.caption("최근 4일 생성곡 기준 · 누적 반응 + 최근 변화량 + 신선도 점수")
 
 raw_db, raw_hist, error = load_encrypted_data()
 
@@ -700,44 +770,21 @@ if raw_db is None or raw_db.empty:
 db = prepare_db(raw_db)
 hist = prepare_history(raw_hist)
 
-with st.sidebar:
-    st.header("Ranking Settings")
-
-    top_n = st.slider("표시 개수", min_value=20, max_value=500, value=TOP_N_DEFAULT, step=20)
-
-    growth_window_hours = st.slider("변화량 계산 시간", min_value=1, max_value=24, value=3, step=1)
-
-    max_age_days = st.slider("표시할 생성일 범위", min_value=1, max_value=4, value=4, step=1)
-
-    st.divider()
-
-    play_weight = st.slider("플레이 가중치", min_value=0.0, max_value=5.0, value=1.0, step=0.1)
-    like_weight = st.slider("좋아요 가중치", min_value=0.0, max_value=8.0, value=3.0, step=0.1)
-    comment_weight = st.slider("댓글 가중치", min_value=0.0, max_value=10.0, value=4.0, step=0.1)
-    growth_weight = st.slider("최근 변화량 가중치", min_value=0.0, max_value=10.0, value=2.5, step=0.1)
-    freshness_weight = st.slider("신선도 가중치", min_value=0.0, max_value=80.0, value=35.0, step=1.0)
-    freshness_power = st.slider("신선도 감쇠 곡률", min_value=0.5, max_value=3.0, value=1.35, step=0.05)
-
-    st.divider()
-
-    keyword = st.text_input("검색", "")
-    hide_contest = st.checkbox("콘테스트/캠페인 곡 숨기기", value=True)
-
 scored = score_songs(
     db=db,
     hist=hist,
-    play_weight=play_weight,
-    like_weight=like_weight,
-    comment_weight=comment_weight,
-    growth_weight=growth_weight,
-    freshness_weight=freshness_weight,
-    growth_window_hours=growth_window_hours,
-    freshness_power=freshness_power,
+    play_weight=PLAY_WEIGHT,
+    like_weight=LIKE_WEIGHT,
+    comment_weight=COMMENT_WEIGHT,
+    growth_weight=GROWTH_WEIGHT,
+    freshness_weight=FRESHNESS_WEIGHT,
+    growth_window_hours=GROWTH_WINDOW_HOURS,
+    freshness_power=FRESHNESS_POWER,
 )
 
-view = filter_view(scored, keyword, hide_contest, max_age_days)
+view = filter_view(scored)
 
-view = view.sort_values("trend_score", ascending=False, na_position="last").head(top_n).copy()
+view = view.sort_values("trend_score", ascending=False, na_position="last").head(TOP_N).copy()
 view = view.reset_index(drop=True)
 view.insert(0, "rank", range(1, len(view) + 1))
 
@@ -764,19 +811,19 @@ with tab2:
 
     formula_text = (
         "base_score =\n"
-        f"  log1p(play_count) × {play_weight}\n"
-        f"+ log1p(upvote_count) × {like_weight}\n"
-        f"+ log1p(comment_count) × {comment_weight}\n\n"
+        f"  log1p(play_count) × {PLAY_WEIGHT}\n"
+        f"+ log1p(upvote_count) × {LIKE_WEIGHT}\n"
+        f"+ log1p(comment_count) × {COMMENT_WEIGHT}\n\n"
         "growth_score =\n"
         f"  (\n"
-        f"    log1p(play_delta_{growth_window_hours}h) × 1.2\n"
-        f"  + log1p(upvote_delta_{growth_window_hours}h) × 5.0\n"
-        f"  + log1p(comment_delta_{growth_window_hours}h) × 8.0\n"
-        f"  ) × {growth_weight}\n\n"
+        f"    log1p(play_delta_{GROWTH_WINDOW_HOURS}h) × 1.2\n"
+        f"  + log1p(upvote_delta_{GROWTH_WINDOW_HOURS}h) × 5.0\n"
+        f"  + log1p(comment_delta_{GROWTH_WINDOW_HOURS}h) × 8.0\n"
+        f"  ) × {GROWTH_WEIGHT}\n\n"
         "freshness =\n"
-        f"  max(0, 1 - age_hours / 96) ^ {freshness_power}\n\n"
+        f"  max(0, 1 - age_hours / 96) ^ {FRESHNESS_POWER}\n\n"
         "freshness_score =\n"
-        f"  freshness × {freshness_weight}\n\n"
+        f"  freshness × {FRESHNESS_WEIGHT}\n\n"
         "trend_score =\n"
         "  base_score + growth_score + freshness_score"
     )
@@ -812,7 +859,6 @@ with tab2:
         use_container_width=True,
         hide_index=True,
     )
-
 
 with tab3:
     if hist.empty:
