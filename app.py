@@ -1707,6 +1707,21 @@ def render_player_ranking(df, hist):
         font-variant-numeric: tabular-nums;
     }
 
+    .song-table th.sortable {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .song-table th.sortable:hover {
+        color: var(--accent-dark);
+    }
+
+    .sort-indicator {
+        margin-left: 4px;
+        font-size: 10px;
+        color: var(--muted);
+    }
+
     .chart-wrap {
         border: 1px solid var(--line);
         border-radius: 12px;
@@ -1812,15 +1827,15 @@ def render_player_ranking(df, hist):
                     <thead>
                         <tr>
                             <th style="width:46px; text-align:center;">선택</th>
-                            <th style="width:42px; text-align:right;">순위</th>
-                            <th style="width:58px; text-align:center;">변동</th>
-                            <th style="width:76px;">앨범</th>
-                            <th style="width:360px;">곡 제목</th>
+                            <th class="sortable" data-sort-key="rank" style="width:42px; text-align:right;">순위<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="rank_change" style="width:58px; text-align:center;">변동<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="has_image" style="width:76px;">앨범<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="title" style="width:360px;">곡 제목<span class="sort-indicator"></span></th>
                             <th style="width:170px;">스타일</th>
-                            <th style="width:210px;">창작자</th>
-                            <th style="width:76px; text-align:right;">플레이</th>
-                            <th style="width:76px; text-align:right;">좋아요</th>
-                            <th style="width:64px; text-align:right;">댓글</th>
+                            <th class="sortable" data-sort-key="creator" style="width:210px;">창작자<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="play_count" style="width:76px; text-align:right;">플레이<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="upvote_count" style="width:76px; text-align:right;">좋아요<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="comment_count" style="width:64px; text-align:right;">댓글<span class="sort-indicator"></span></th>
                             <th style="width:90px; text-align:center;">상세정보</th>
                         </tr>
                     </thead>
