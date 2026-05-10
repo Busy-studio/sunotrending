@@ -41,7 +41,7 @@ st.set_page_config(
 
 
 # ================================
-# Text / encoding helpers
+# Text helpers
 # ================================
 
 def broken_score(s: str) -> int:
@@ -82,14 +82,6 @@ def try_decode_utf8_from_latinish(s: str):
 
 
 def fix_mojibake(value):
-    """
-    UTF-8이 Latin-1/CP1252로 잘못 읽힌 문자열을 복구.
-    예:
-    - ÐÐ¾Ð»Ð¾Ð´Ð¾Ð¹ → Молодой
-    - ç»ç → 玻璃
-    - íëë → 하나님
-    - âElectricâ → “Electric”
-    """
     if pd.isna(value):
         return ""
 
@@ -133,13 +125,31 @@ def fix_mojibake(value):
         if not frontier:
             break
 
-    best = min(candidates, key=broken_score)
-
-    return best
+    return min(candidates, key=broken_score)
 
 
-def esc(value):
-    return html.escape(fix_mojibake(value))
+def safe_text(value):
+    if pd.isna(value):
+        return ""
+
+    s = fix_mojibake(value).strip()
+
+    if s.lower() in ["nan", "none"]:
+        return ""
+
+    return s
+
+
+def safe_url(value):
+    if pd.isna(value):
+        return ""
+
+    s = str(value).strip()
+
+    if s.lower() in ["nan", "none", ""]:
+        return ""
+
+    return s
 
 
 def fmt_int(value):
@@ -149,24 +159,6 @@ def fmt_int(value):
         return f"{int(float(value)):,}"
     except Exception:
         return "0"
-
-
-def safe_url(value):
-    if pd.isna(value):
-        return ""
-    s = str(value).strip()
-    if s.lower() in ["nan", "none", ""]:
-        return ""
-    return s
-
-
-def safe_text(value):
-    if pd.isna(value):
-        return ""
-    s = fix_mojibake(value).strip()
-    if s.lower() in ["nan", "none"]:
-        return ""
-    return s
 
 
 def normalize_handle(value):
@@ -222,8 +214,14 @@ def prepare_db(db):
     db = db.copy()
 
     text_cols = [
-        "title", "handle", "display_name", "model",
-        "display_tags", "lyrics", "prompt"
+        "title",
+        "handle",
+        "display_name",
+        "model",
+        "display_tags",
+        "lyrics",
+        "prompt",
+        "gpt_description_prompt",
     ]
 
     for col in text_cols:
@@ -237,6 +235,8 @@ def prepare_db(db):
     for col in ["play_count", "upvote_count", "comment_count", "flag_count"]:
         if col in db.columns:
             db[col] = pd.to_numeric(db[col], errors="coerce").fillna(0)
+        else:
+            db[col] = 0
 
     if "id" in db.columns:
         db["id"] = db["id"].astype(str)
@@ -407,10 +407,6 @@ def score_songs(
     return view
 
 
-# ================================
-# Filtering
-# ================================
-
 def filter_view(df):
     view = df.copy()
 
@@ -452,15 +448,18 @@ def build_song_payload(df):
         )
 
         created_at = r.get("created_at")
+
         if pd.notna(created_at):
             created_txt = created_at.strftime("%Y-%m-%d %H:%M UTC")
         else:
             created_txt = "-"
 
         lyrics_candidates = []
+
         for col in ["lyrics", "prompt", "gpt_description_prompt", "display_tags"]:
             if col in r.index:
                 txt = safe_text(r.get(col, ""))
+
                 if txt:
                     lyrics_candidates.append(txt)
 
@@ -493,7 +492,7 @@ def render_player_ranking(df):
     songs = build_song_payload(df)
     songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
 
-    css = """
+    html_template = """
     <style>
     :root {
         --bg: #ffffff;
@@ -534,7 +533,7 @@ def render_player_ranking(df):
         grid-template-columns: 330px minmax(720px, 1fr);
         gap: 16px;
         width: 100%;
-        min-height: 860px;
+        min-height: 1200px;
     }
 
     .player-panel {
@@ -545,8 +544,8 @@ def render_player_ranking(df):
         border: 1px solid var(--line);
         border-radius: 18px;
         padding: 14px;
-        height: 860px;
-        overflow: hidden;
+        height: 1200px;
+        overflow-y: auto;
     }
 
     .now-cover-wrap {
@@ -646,16 +645,6 @@ def render_player_ranking(df):
         border-color: var(--accent);
     }
 
-    .volume-row {
-        display: grid;
-        grid-template-columns: 54px 1fr 42px;
-        gap: 8px;
-        align-items: center;
-        font-size: 12px;
-        color: var(--muted);
-        margin: 8px 0 12px 0;
-    }
-
     .small-actions {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -680,6 +669,16 @@ def render_player_ranking(df):
         border-color: var(--accent);
     }
 
+    .volume-row {
+        display: grid;
+        grid-template-columns: 54px 1fr 42px;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+        color: var(--muted);
+        margin: 8px 0 12px 0;
+    }
+
     .playlist-head {
         display: flex;
         justify-content: space-between;
@@ -702,7 +701,7 @@ def render_player_ranking(df):
         background: #ffffff;
         border-radius: 12px;
         overflow-y: auto;
-        height: 188px;
+        height: 260px;
     }
 
     .playlist-empty {
@@ -773,7 +772,7 @@ def render_player_ranking(df):
         background: #ffffff;
         border-radius: 12px;
         padding: 10px;
-        height: 110px;
+        height: 210px;
         overflow-y: auto;
         white-space: pre-wrap;
         font-size: 12px;
@@ -829,7 +828,7 @@ def render_player_ranking(df):
     .table-wrap {
         width: 100%;
         overflow-x: auto;
-        max-height: 820px;
+        max-height: 1120px;
         overflow-y: auto;
     }
 
@@ -980,20 +979,19 @@ def render_player_ranking(df):
         .player-panel {
             position: relative;
             height: auto;
+            max-height: none;
         }
 
         .playlist {
-            height: 180px;
+            height: 220px;
         }
 
         .lyrics-panel {
-            height: 120px;
+            height: 180px;
         }
     }
     </style>
-    """
 
-    html_body = """
     <div class="app-shell">
         <aside class="player-panel">
             <div class="now-cover-wrap" id="nowCoverWrap">
@@ -1023,8 +1021,8 @@ def render_player_ranking(df):
             </div>
 
             <div class="small-actions">
-                <button class="small-btn active" id="normalizeBtn">Auto normalize</button>
                 <button class="small-btn" id="clearBtn">Playlist clear</button>
+                <button class="small-btn" id="openBtn">Open Suno</button>
             </div>
 
             <div class="volume-row">
@@ -1077,11 +1075,9 @@ def render_player_ranking(df):
             </div>
         </main>
     </div>
-    """
 
-    js = f"""
     <script>
-    const songs = {songs_json};
+    const songs = __SONGS_JSON__;
 
     let playlist = [];
     let currentIndex = -1;
@@ -1089,12 +1085,6 @@ def render_player_ranking(df):
 
     let repeatOne = false;
     let repeatAll = true;
-    let normalizeOn = true;
-
-    let audioContext = null;
-    let sourceNode = null;
-    let compressorNode = null;
-    let gainNode = null;
 
     const nowCoverWrap = document.getElementById("nowCoverWrap");
     const nowTitle = document.getElementById("nowTitle");
@@ -1108,8 +1098,8 @@ def render_player_ranking(df):
     const nextBtn = document.getElementById("nextBtn");
     const repeatOneBtn = document.getElementById("repeatOneBtn");
     const repeatAllBtn = document.getElementById("repeatAllBtn");
-    const normalizeBtn = document.getElementById("normalizeBtn");
     const clearBtn = document.getElementById("clearBtn");
+    const openBtn = document.getElementById("openBtn");
     const volume = document.getElementById("volume");
     const volumeText = document.getElementById("volumeText");
     const progress = document.getElementById("progress");
@@ -1118,73 +1108,44 @@ def render_player_ranking(df):
     const searchInput = document.getElementById("searchInput");
     const songTableBody = document.getElementById("songTableBody");
 
-    function escapeHtml(text) {{
+    function escapeHtml(text) {
         if (text === null || text === undefined) return "";
+
         return String(text)
             .replaceAll("&", "&amp;")
             .replaceAll("<", "&lt;")
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#039;");
-    }}
+    }
 
-    function formatInt(n) {{
-        try {{
+    function formatInt(n) {
+        try {
             return Number(n || 0).toLocaleString();
-        }} catch (e) {{
+        } catch (e) {
             return "0";
-        }}
-    }}
+        }
+    }
 
-    function formatTime(sec) {{
+    function formatTime(sec) {
         if (!isFinite(sec) || sec < 0) return "0:00";
+
         const m = Math.floor(sec / 60);
         const s = Math.floor(sec % 60);
-        return `${{m}}:${{String(s).padStart(2, "0")}}`;
-    }}
 
-    function setupAudioGraph() {{
-        if (audioContext) return;
+        return `${m}:${String(s).padStart(2, "0")}`;
+    }
 
-        try {{
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            sourceNode = audioContext.createMediaElementSource(audio);
-            compressorNode = audioContext.createDynamicsCompressor();
-            gainNode = audioContext.createGain();
-
-            compressorNode.threshold.value = -24;
-            compressorNode.knee.value = 28;
-            compressorNode.ratio.value = 7;
-            compressorNode.attack.value = 0.004;
-            compressorNode.release.value = 0.22;
-
-            sourceNode.connect(compressorNode);
-            compressorNode.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-
-            updateVolume();
-        }} catch (err) {{
-            console.log("Audio graph setup failed", err);
-            normalizeOn = false;
-            normalizeBtn.classList.remove("active");
-        }}
-    }}
-
-    function updateVolume() {{
+    function updateVolume() {
         const v = Number(volume.value || 80) / 100;
-        volumeText.textContent = `${{Math.round(v * 100)}}%`;
+        volumeText.textContent = `${Math.round(v * 100)}%`;
+        audio.volume = v;
+    }
 
-        if (gainNode) {{
-            gainNode.gain.value = v;
-        }} else {{
-            audio.volume = v;
-        }}
-    }}
-
-    function renderTable(filterText = "") {{
+    function renderTable(filterText = "") {
         const q = filterText.trim().toLowerCase();
 
-        const filtered = songs.filter(song => {{
+        const filtered = songs.filter(song => {
             if (!q) return true;
 
             const hay = [
@@ -1194,117 +1155,126 @@ def render_player_ranking(df):
             ].join(" ").toLowerCase();
 
             return hay.includes(q);
-        }});
+        });
 
-        songTableBody.innerHTML = filtered.map(song => {{
+        songTableBody.innerHTML = filtered.map(song => {
             const imageHtml = song.image_url
-                ? `<img class="cover" src="${{escapeHtml(song.image_url)}}" loading="lazy">`
+                ? `<img class="cover" src="${escapeHtml(song.image_url)}" loading="lazy">`
                 : `<div class="cover"></div>`;
 
             const titleHtml = song.song_url
-                ? `<a class="title-link" href="${{escapeHtml(song.song_url)}}" target="_blank" rel="noopener noreferrer">${{escapeHtml(song.title)}}</a>`
-                : `<span class="title-link">${{escapeHtml(song.title)}}</span>`;
+                ? `<a class="title-link" href="${escapeHtml(song.song_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(song.title)}</a>`
+                : `<span class="title-link">${escapeHtml(song.title)}</span>`;
 
             const handleHtml = song.handle
-                ? `<div class="subtle">${{escapeHtml(song.handle)}}</div>`
+                ? `<div class="subtle">${escapeHtml(song.handle)}</div>`
                 : "";
 
             return `
-                <tr data-song-id="${{escapeHtml(song.id)}}">
-                    <td class="rank">${{song.rank}}</td>
+                <tr data-song-id="${escapeHtml(song.id)}">
+                    <td class="rank">${song.rank}</td>
                     <td>
                         <div class="cover-cell">
-                            <button class="cover-btn" onclick="addAndPlay('${{escapeHtml(song.id)}}')" title="추가 후 재생">
-                                ${{imageHtml}}
+                            <button class="cover-btn" onclick="addAndPlay('${escapeHtml(song.id)}')" title="추가 후 재생">
+                                ${imageHtml}
                             </button>
-                            <button class="add-btn" id="add-${{escapeHtml(song.id)}}" onclick="addToPlaylist('${{escapeHtml(song.id)}}')" title="플레이리스트 추가">+</button>
+                            <button class="add-btn" id="add-${escapeHtml(song.id)}" onclick="addToPlaylist('${escapeHtml(song.id)}')" title="플레이리스트 추가">+</button>
                         </div>
                     </td>
                     <td class="title-cell">
-                        ${{titleHtml}}
-                        <div class="subtle">${{escapeHtml(song.created_at)}}</div>
+                        ${titleHtml}
+                        <div class="subtle">${escapeHtml(song.created_at)}</div>
                     </td>
                     <td class="creator">
-                        ${{escapeHtml(song.creator)}}
-                        ${{handleHtml}}
+                        ${escapeHtml(song.creator)}
+                        ${handleHtml}
                     </td>
-                    <td class="num">${{formatInt(song.play_count)}}</td>
-                    <td class="num">${{formatInt(song.upvote_count)}}</td>
-                    <td class="num">${{formatInt(song.comment_count)}}</td>
+                    <td class="num">${formatInt(song.play_count)}</td>
+                    <td class="num">${formatInt(song.upvote_count)}</td>
+                    <td class="num">${formatInt(song.comment_count)}</td>
                 </tr>
             `;
-        }}).join("");
+        }).join("");
 
         refreshAddButtons();
-    }}
+    }
 
-    function getSongById(id) {{
+    function getSongById(id) {
         return songs.find(s => String(s.id) === String(id));
-    }}
+    }
 
-    function addToPlaylist(id) {{
+    function addToPlaylist(id) {
         const song = getSongById(id);
+
         if (!song) return;
 
-        if (!playlist.some(s => String(s.id) === String(song.id))) {{
-            playlist.push(song);
-        }}
+        if (!song.audio_url) {
+            alert("이 곡에는 audio_url이 없습니다.");
+            return;
+        }
 
-        if (currentIndex === -1) {{
+        if (!playlist.some(s => String(s.id) === String(song.id))) {
+            playlist.push(song);
+        }
+
+        if (currentIndex === -1) {
             currentIndex = playlist.findIndex(s => String(s.id) === String(song.id));
             loadCurrent(false);
-        }}
+        }
 
         renderPlaylist();
         refreshAddButtons();
-    }}
+    }
 
-    function addAndPlay(id) {{
+    function addAndPlay(id) {
         addToPlaylist(id);
+
         const idx = playlist.findIndex(s => String(s.id) === String(id));
-        if (idx >= 0) {{
+
+        if (idx >= 0) {
             currentIndex = idx;
             loadCurrent(true);
-        }}
-    }}
+        }
+    }
 
     window.addToPlaylist = addToPlaylist;
     window.addAndPlay = addAndPlay;
 
-    function removeFromPlaylist(id, event) {{
+    function removeFromPlaylist(id, event) {
         if (event) event.stopPropagation();
 
         const idx = playlist.findIndex(s => String(s.id) === String(id));
+
         if (idx < 0) return;
 
         const wasCurrent = idx === currentIndex;
 
         playlist.splice(idx, 1);
 
-        if (playlist.length === 0) {{
+        if (playlist.length === 0) {
             currentIndex = -1;
             audio.pause();
             audio.removeAttribute("src");
             updateNowPlaying(null);
-        }} else {{
-            if (idx < currentIndex) {{
+        } else {
+            if (idx < currentIndex) {
                 currentIndex -= 1;
-            }} else if (wasCurrent) {{
+            } else if (wasCurrent) {
                 currentIndex = Math.min(idx, playlist.length - 1);
                 loadCurrent(false);
-            }}
-        }}
+            }
+        }
 
         renderPlaylist();
         refreshAddButtons();
-    }}
+    }
 
     window.removeFromPlaylist = removeFromPlaylist;
 
-    function renderPlaylist() {{
-        playlistCount.textContent = `${{playlist.length}} tracks`;
+    function renderPlaylist() {
+        playlistCount.textContent = `${playlist.length} tracks`;
 
-        if (playlist.length === 0) {{
+        if (playlist.length === 0) {
             playlistEl.innerHTML = `
                 <div class="playlist-empty">
                     아직 플레이리스트가 비어 있습니다.<br>
@@ -1312,54 +1282,56 @@ def render_player_ranking(df):
                 </div>
             `;
             return;
-        }}
+        }
 
-        playlistEl.innerHTML = playlist.map((song, idx) => {{
+        playlistEl.innerHTML = playlist.map((song, idx) => {
             const active = idx === currentIndex ? "active" : "";
             const thumb = song.image_url
-                ? `<img class="playlist-thumb" src="${{escapeHtml(song.image_url)}}" loading="lazy">`
+                ? `<img class="playlist-thumb" src="${escapeHtml(song.image_url)}" loading="lazy">`
                 : `<div class="playlist-thumb"></div>`;
 
             return `
-                <div class="playlist-item ${{active}}" onclick="playPlaylistIndex(${{idx}})">
-                    ${{thumb}}
+                <div class="playlist-item ${active}" onclick="playPlaylistIndex(${idx})">
+                    ${thumb}
                     <div class="playlist-meta">
-                        <div class="playlist-song-title">${{escapeHtml(song.title)}}</div>
-                        <div class="playlist-song-sub">${{escapeHtml(song.creator)}} ${{escapeHtml(song.handle || "")}}</div>
+                        <div class="playlist-song-title">${escapeHtml(song.title)}</div>
+                        <div class="playlist-song-sub">${escapeHtml(song.creator)} ${escapeHtml(song.handle || "")}</div>
                     </div>
-                    <button class="remove-btn" onclick="removeFromPlaylist('${{escapeHtml(song.id)}}', event)">×</button>
+                    <button class="remove-btn" onclick="removeFromPlaylist('${escapeHtml(song.id)}', event)">×</button>
                 </div>
             `;
-        }}).join("");
-    }}
+        }).join("");
+    }
 
-    function refreshAddButtons() {{
-        songs.forEach(song => {{
-            const btn = document.getElementById(`add-${{song.id}}`);
+    function refreshAddButtons() {
+        songs.forEach(song => {
+            const btn = document.getElementById(`add-${song.id}`);
+
             if (!btn) return;
 
             const added = playlist.some(s => String(s.id) === String(song.id));
 
-            if (added) {{
+            if (added) {
                 btn.classList.add("added");
                 btn.textContent = "✓";
-            }} else {{
+            } else {
                 btn.classList.remove("added");
                 btn.textContent = "+";
-            }}
-        }});
-    }}
+            }
+        });
+    }
 
-    function playPlaylistIndex(idx) {{
+    function playPlaylistIndex(idx) {
         if (idx < 0 || idx >= playlist.length) return;
+
         currentIndex = idx;
         loadCurrent(true);
-    }}
+    }
 
     window.playPlaylistIndex = playPlaylistIndex;
 
-    function updateNowPlaying(song) {{
-        if (!song) {{
+    function updateNowPlaying(song) {
+        if (!song) {
             nowCoverWrap.innerHTML = `<div class="now-placeholder">No track selected</div>`;
             nowTitle.textContent = "플레이리스트에 곡을 추가하세요";
             nowCreator.textContent = "앨범 이미지나 + 버튼을 누르면 추가됩니다.";
@@ -1370,182 +1342,146 @@ def render_player_ranking(df):
             currentTimeEl.textContent = "0:00";
             durationEl.textContent = "0:00";
             return;
-        }}
+        }
 
-        if (song.image_url) {{
-            nowCoverWrap.innerHTML = `<img class="now-cover" src="${{escapeHtml(song.image_url)}}">`;
-        }} else {{
+        if (song.image_url) {
+            nowCoverWrap.innerHTML = `<img class="now-cover" src="${escapeHtml(song.image_url)}">`;
+        } else {
             nowCoverWrap.innerHTML = `<div class="now-placeholder">No image</div>`;
-        }}
+        }
 
         nowTitle.textContent = song.title;
-        nowCreator.textContent = `${{song.creator || ""}} ${{song.handle || ""}}`.trim();
+        nowCreator.textContent = `${song.creator || ""} ${song.handle || ""}`.trim();
 
-        if (song.lyrics && song.lyrics.trim()) {{
+        if (song.lyrics && song.lyrics.trim()) {
             lyricsPanel.textContent = song.lyrics;
             lyricsPanel.classList.remove("empty");
-        }} else {{
+        } else {
             lyricsPanel.textContent = "가사/프롬프트 정보가 아직 수집되지 않았습니다.";
             lyricsPanel.classList.add("empty");
-        }}
-    }}
+        }
+    }
 
-    function loadCurrent(autoplay) {{
-        if (currentIndex < 0 || currentIndex >= playlist.length) {{
+    function loadCurrent(autoplay) {
+        if (currentIndex < 0 || currentIndex >= playlist.length) {
             updateNowPlaying(null);
             return;
-        }}
+        }
 
         const song = playlist[currentIndex];
 
         updateNowPlaying(song);
         renderPlaylist();
 
-        if (!song.audio_url) {{
+        if (!song.audio_url) {
             alert("이 곡에는 audio_url이 없습니다.");
             return;
-        }}
+        }
 
         audio.pause();
         audio.src = song.audio_url;
         audio.load();
+        updateVolume();
 
-        if (autoplay) {{
-            setupAudioGraph();
-
-            if (audioContext && audioContext.state === "suspended") {{
-                audioContext.resume();
-            }}
-
+        if (autoplay) {
             audio.play()
-                .then(() => {{
+                .then(() => {
                     playBtn.textContent = "Ⅱ";
-                }})
-                .catch(err => {{
+                })
+                .catch(err => {
                     console.log(err);
                     playBtn.textContent = "▶";
                     alert("브라우저가 오디오 재생을 막았거나 URL을 재생할 수 없습니다.");
-                }});
-        }} else {{
+                });
+        } else {
             playBtn.textContent = "▶";
-        }}
-    }}
+        }
+    }
 
-    function togglePlay() {{
-        if (currentIndex === -1) {{
-            if (playlist.length > 0) {{
+    function togglePlay() {
+        if (currentIndex === -1) {
+            if (playlist.length > 0) {
                 currentIndex = 0;
                 loadCurrent(true);
-            }}
+            }
+
             return;
-        }}
+        }
 
-        setupAudioGraph();
-
-        if (audioContext && audioContext.state === "suspended") {{
-            audioContext.resume();
-        }}
-
-        if (audio.paused) {{
+        if (audio.paused) {
             audio.play()
-                .then(() => {{
+                .then(() => {
                     playBtn.textContent = "Ⅱ";
-                }})
-                .catch(err => {{
+                })
+                .catch(err => {
                     console.log(err);
                     alert("브라우저가 오디오 재생을 막았거나 URL을 재생할 수 없습니다.");
-                }});
-        }} else {{
+                });
+        } else {
             audio.pause();
             playBtn.textContent = "▶";
-        }}
-    }}
+        }
+    }
 
-    function playNext() {{
+    function playNext() {
         if (playlist.length === 0) return;
 
-        if (currentIndex < playlist.length - 1) {{
+        if (currentIndex < playlist.length - 1) {
             currentIndex += 1;
             loadCurrent(true);
-        }} else if (repeatAll) {{
+        } else if (repeatAll) {
             currentIndex = 0;
             loadCurrent(true);
-        }} else {{
+        } else {
             audio.pause();
             playBtn.textContent = "▶";
-        }}
-    }}
+        }
+    }
 
-    function playPrev() {{
+    function playPrev() {
         if (playlist.length === 0) return;
 
-        if (audio.currentTime > 3) {{
+        if (audio.currentTime > 3) {
             audio.currentTime = 0;
             return;
-        }}
+        }
 
-        if (currentIndex > 0) {{
+        if (currentIndex > 0) {
             currentIndex -= 1;
             loadCurrent(true);
-        }} else if (repeatAll) {{
+        } else if (repeatAll) {
             currentIndex = playlist.length - 1;
             loadCurrent(true);
-        }}
-    }}
+        }
+    }
 
     playBtn.addEventListener("click", togglePlay);
     nextBtn.addEventListener("click", playNext);
     prevBtn.addEventListener("click", playPrev);
 
-    repeatOneBtn.addEventListener("click", () => {{
+    repeatOneBtn.addEventListener("click", () => {
         repeatOne = !repeatOne;
-        if (repeatOne) {{
+
+        if (repeatOne) {
             repeatAll = false;
-        }}
+        }
 
         repeatOneBtn.classList.toggle("active", repeatOne);
         repeatAllBtn.classList.toggle("active", repeatAll);
-    }});
+    });
 
-    repeatAllBtn.addEventListener("click", () => {{
+    repeatAllBtn.addEventListener("click", () => {
         repeatAll = !repeatAll;
-        if (repeatAll) {{
+
+        if (repeatAll) {
             repeatOne = false;
-        }}
+        }
 
         repeatOneBtn.classList.toggle("active", repeatOne);
         repeatAllBtn.classList.toggle("active", repeatAll);
-    }});
+    });
 
-    normalizeBtn.addEventListener("click", () => {{
-        normalizeOn = !normalizeOn;
-        normalizeBtn.classList.toggle("active", normalizeOn);
-
-        if (!audioContext) {{
-            setupAudioGraph();
-        }}
-
-        if (!audioContext || !sourceNode || !gainNode) return;
-
-        try {{
-            sourceNode.disconnect();
-            compressorNode.disconnect();
-            gainNode.disconnect();
-
-            if (normalizeOn) {{
-                sourceNode.connect(compressorNode);
-                compressorNode.connect(gainNode);
-                gainNode.connect(audioContext.destination);
-            }} else {{
-                sourceNode.connect(gainNode);
-                gainNode.connect(audioContext.destination);
-            }}
-        }} catch (err) {{
-            console.log(err);
-        }}
-    }});
-
-    clearBtn.addEventListener("click", () => {{
+    clearBtn.addEventListener("click", () => {
         playlist = [];
         currentIndex = -1;
         audio.pause();
@@ -1553,47 +1489,58 @@ def render_player_ranking(df):
         updateNowPlaying(null);
         renderPlaylist();
         refreshAddButtons();
-    }});
+    });
+
+    openBtn.addEventListener("click", () => {
+        if (currentIndex < 0 || currentIndex >= playlist.length) return;
+
+        const song = playlist[currentIndex];
+
+        if (song.song_url) {
+            window.open(song.song_url, "_blank", "noopener,noreferrer");
+        }
+    });
 
     volume.addEventListener("input", updateVolume);
 
-    progress.addEventListener("input", () => {{
+    progress.addEventListener("input", () => {
         if (!isFinite(audio.duration) || audio.duration <= 0) return;
-        audio.currentTime = (Number(progress.value) / 1000) * audio.duration;
-    }});
 
-    audio.addEventListener("timeupdate", () => {{
-        if (isFinite(audio.duration) && audio.duration > 0) {{
+        audio.currentTime = (Number(progress.value) / 1000) * audio.duration;
+    });
+
+    audio.addEventListener("timeupdate", () => {
+        if (isFinite(audio.duration) && audio.duration > 0) {
             progress.value = Math.round((audio.currentTime / audio.duration) * 1000);
             currentTimeEl.textContent = formatTime(audio.currentTime);
             durationEl.textContent = formatTime(audio.duration);
-        }}
-    }});
+        }
+    });
 
-    audio.addEventListener("loadedmetadata", () => {{
+    audio.addEventListener("loadedmetadata", () => {
         durationEl.textContent = formatTime(audio.duration);
-    }});
+    });
 
-    audio.addEventListener("play", () => {{
+    audio.addEventListener("play", () => {
         playBtn.textContent = "Ⅱ";
-    }});
+    });
 
-    audio.addEventListener("pause", () => {{
+    audio.addEventListener("pause", () => {
         playBtn.textContent = "▶";
-    }});
+    });
 
-    audio.addEventListener("ended", () => {{
-        if (repeatOne) {{
+    audio.addEventListener("ended", () => {
+        if (repeatOne) {
             audio.currentTime = 0;
             audio.play();
-        }} else {{
+        } else {
             playNext();
-        }}
-    }});
+        }
+    });
 
-    searchInput.addEventListener("input", () => {{
+    searchInput.addEventListener("input", () => {
         renderTable(searchInput.value);
-    }});
+    });
 
     renderTable("");
     renderPlaylist();
@@ -1601,15 +1548,11 @@ def render_player_ranking(df):
     </script>
     """
 
-    full_html = f"""
-    {css}
-    {html_body}
-    {js}
-    """
+    full_html = html_template.replace("__SONGS_JSON__", songs_json)
 
     components.html(
         full_html,
-        height=940,
+        height=1500,
         scrolling=True,
     )
 
