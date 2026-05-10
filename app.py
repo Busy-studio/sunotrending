@@ -2,6 +2,8 @@ import os
 import math
 import html
 import json
+import time
+import requests
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -16,6 +18,19 @@ except Exception:
 DB_ZIP_PATH = "data/suno_song_db.zip"
 HISTORY_ZIP_PATH = "data/suno_song_history.zip"
 DATA_DIR = "data"
+
+# data branch에서 ZIP을 받아오기 위한 설정
+# Streamlit secrets 또는 환경변수에 설정:
+# DATA_RAW_BASE_URL = "https://raw.githubusercontent.com/OWNER/REPO/data/data"
+DATA_RAW_BASE_URL = st.secrets.get(
+    "DATA_RAW_BASE_URL",
+    os.getenv("DATA_RAW_BASE_URL", "https://raw.githubusercontent.com/Busy-studio/sunotrending/data/data"),
+).rstrip("/")
+
+GITHUB_RAW_TOKEN = st.secrets.get(
+    "GITHUB_RAW_TOKEN",
+    os.getenv("GITHUB_RAW_TOKEN", ""),
+)
 
 RETENTION_HOURS = 96  # 4일
 TOP_N = 200
@@ -215,6 +230,61 @@ def build_creator_display(display_name_value, handle_value):
 
     return primary, secondary
 
+
+@st.cache_data(ttl=60)
+def sync_remote_data_files(raw_base_url, github_token=""):
+    if not raw_base_url:
+        return {
+            "enabled": False,
+            "message": "DATA_RAW_BASE_URL is empty. Using local data files.",
+        }
+
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    headers = {
+        "Accept": "application/octet-stream",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "User-Agent": "suno-trending-streamlit",
+    }
+
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
+    downloaded = []
+
+    for filename in ["suno_song_db.zip", "suno_song_history.zip"]:
+        url = f"{raw_base_url}/{filename}?t={int(time.time() // 60)}"
+        dest_path = os.path.join(DATA_DIR, filename)
+        tmp_path = dest_path + ".tmp"
+
+        response = requests.get(url, headers=headers, timeout=30)
+
+        if response.status_code == 404:
+            raise RuntimeError(f"Remote data file not found: {url}")
+
+        response.raise_for_status()
+
+        content = response.content
+
+        if len(content) < 100:
+            raise RuntimeError(f"Remote data file looks too small: {filename}, {len(content)} bytes")
+
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+
+        os.replace(tmp_path, dest_path)
+
+        downloaded.append({
+            "filename": filename,
+            "bytes": len(content),
+        })
+
+    return {
+        "enabled": True,
+        "message": "Remote data files synced.",
+        "downloaded": downloaded,
+    }
 
 # ================================
 # Data loading
@@ -2437,6 +2507,20 @@ st.caption("최근 4일 생성곡 기준으로 누적 반응,  최근 변화량 
 if st.button("데이터 새로고침"):
     st.cache_data.clear()
     st.rerun()
+
+try:
+    sync_result = sync_remote_data_files(DATA_RAW_BASE_URL, GITHUB_RAW_TOKEN)
+
+    if sync_result.get("enabled"):
+        st.caption(
+            "Remote data synced: "
+            + ", ".join(
+                f"{x['filename']} ({x['bytes']:,} bytes)"
+                for x in sync_result.get("downloaded", [])
+            )
+        )
+except Exception as e:
+    st.warning(f"Remote data sync failed. Using existing local data files. Error: {e}")
 
 db_fingerprint = file_fingerprint(DB_ZIP_PATH)
 history_fingerprint = file_fingerprint(HISTORY_ZIP_PATH)
