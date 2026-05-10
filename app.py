@@ -1898,6 +1898,11 @@ def render_player_ranking(df, hist):
     let repeatAll = true;
     let playbackMode = "sequence";
 
+    let sortState = {
+    key: null,
+    direction: null,
+};
+
     const nowCoverWrap = document.getElementById("nowCoverWrap");
     const nowTitle = document.getElementById("nowTitle");
     const nowCreator = document.getElementById("nowCreator");
