@@ -1,0 +1,64 @@
+name: Update Suno Song Stats
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Decrypt existing data
+        env:
+          DATA_ZIP_PASSWORD: ${{ secrets.DATA_ZIP_PASSWORD }}
+        run: |
+          python scripts/decrypt_data.py
+
+      - name: Update public song pages
+        env:
+          REQUEST_SLEEP_SECONDS: "1.2"
+          MAX_UPDATE_ROWS: "1000"
+        run: |
+          python scripts/update_public_song_pages.py
+
+      - name: Encrypt data
+        env:
+          DATA_ZIP_PASSWORD: ${{ secrets.DATA_ZIP_PASSWORD }}
+        run: |
+          python scripts/encrypt_data.py
+
+      - name: Remove plain CSV files
+        run: |
+          rm -f data/suno_song_db.csv
+          rm -f data/suno_song_history.csv
+
+      - name: Commit encrypted data
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add data/suno_song_db.zip data/suno_song_history.zip
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update encrypted Suno data"
+            git push
+          fi
