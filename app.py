@@ -1051,19 +1051,23 @@ def render_player_ranking(df, hist):
 
     .style-cell {
         overflow: hidden;
-        word-break: break-word;
+        white-space: nowrap;
     }
 
     .style-tags {
         display: flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         gap: 4px;
         align-items: center;
+        overflow: hidden;
+        max-width: 100%;
     }
 
     .style-tag {
         display: inline-block;
-        max-width: 100%;
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: 84px;
         border: 1px solid var(--line);
         background: #f9fafb;
         color: #374151;
@@ -1196,17 +1200,6 @@ def render_player_ranking(df, hist):
         font-size: 17px;
         font-weight: 900;
         font-variant-numeric: tabular-nums;
-    }
-
-    .formula-box {
-        border: 1px solid var(--line);
-        background: #fff;
-        border-radius: 12px;
-        padding: 12px;
-        font-size: 12px;
-        line-height: 1.6;
-        color: #374151;
-        margin-bottom: 12px;
     }
 
     .chart-wrap {
@@ -1378,8 +1371,6 @@ def render_player_ranking(df, hist):
                 </div>
             </div>
 
-            <div class="formula-box" id="formulaBox"></div>
-
             <div class="chart-wrap">
                 <canvas id="historyCanvas" width="720" height="260"></canvas>
             </div>
@@ -1430,7 +1421,6 @@ def render_player_ranking(df, hist):
     const scoreBase = document.getElementById("scoreBase");
     const scoreGrowth = document.getElementById("scoreGrowth");
     const scoreFreshness = document.getElementById("scoreFreshness");
-    const formulaBox = document.getElementById("formulaBox");
     const historyCanvas = document.getElementById("historyCanvas");
 
     function escapeHtml(text) {
@@ -1509,7 +1499,7 @@ def render_player_ranking(df, hist):
 
         return `
             <div class="style-tags">
-                ${tags.slice(0, 6).map(tag => `<span class="style-tag">${escapeHtml(tag)}</span>`).join("")}
+                ${tags.slice(0, 4).map(tag => `<span class="style-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join("")}
             </div>
         `;
     }
@@ -2056,48 +2046,6 @@ def render_player_ranking(df, hist):
     searchInput.addEventListener("input", () => {
         renderTable(searchInput.value);
     });
-
-    function openRankingInfo(id) {
-        const song = getSongById(id);
-        if (!song) return;
-
-        modalTitle.textContent = `#${song.rank} ${song.title}`;
-        modalSub.textContent = `${song.creator || ""} ${song.handle || ""}`.trim();
-
-        scoreTrend.textContent = formatFloat(song.trend_score);
-        scoreBase.textContent = formatFloat(song.base_score);
-        scoreGrowth.textContent = formatFloat(song.growth_score);
-        scoreFreshness.textContent = formatFloat(song.freshness_score);
-
-        formulaBox.innerHTML = `
-            <b>공식</b><br>
-            trend_score = base_score + growth_score + freshness_score<br><br>
-
-            base_score = ${formatFloat(rankingConfig.play_weight, 1)} × log1p(play_count)
-            + ${formatFloat(rankingConfig.like_weight, 1)} × log1p(upvote_count)
-            + ${formatFloat(rankingConfig.comment_weight, 1)} × log1p(comment_count)<br><br>
-
-            growth_score = (
-            1.2 × log1p(play_delta_${rankingConfig.growth_window_hours}h)
-            + 5.0 × log1p(like_delta_${rankingConfig.growth_window_hours}h)
-            + 8.0 × log1p(comment_delta_${rankingConfig.growth_window_hours}h)
-            ) × ${formatFloat(rankingConfig.growth_weight, 1)}<br><br>
-
-            freshness_score = freshness^${formatFloat(rankingConfig.freshness_power, 2)} × ${formatFloat(rankingConfig.freshness_weight, 1)}<br><br>
-
-            현재값:
-            play ${formatInt(song.play_count)},
-            like ${formatInt(song.upvote_count)},
-            comment ${formatInt(song.comment_count)} /
-            최근 ${rankingConfig.growth_window_hours}시간 증가량:
-            play +${formatInt(song.play_delta_window)},
-            like +${formatInt(song.upvote_delta_window)},
-            comment +${formatInt(song.comment_delta_window)}
-        `;
-
-        rankingModal.classList.add("open");
-        drawHistoryChart(id);
-    }
 
     function drawHistoryChart(id) {
         const ctx = historyCanvas.getContext("2d");
