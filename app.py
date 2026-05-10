@@ -1238,9 +1238,7 @@ def render_player_ranking(df, hist):
             <div class="now-creator" id="nowCreator">앨범 이미지나 체크 버튼을 누르면 추가됩니다.</div>
             <div class="now-style-tags" id="nowStyleTags"></div>
 
-            <div class="lyrics-panel empty" id="lyricsPanel">
-                가사/프롬프트 정보가 있으면 여기에 표시됩니다.
-            </div>
+            <div class="lyrics-panel empty" id="lyricsPanel">가사/프롬프트 정보가 있으면 여기에 표시됩니다.</div>
 
             <div class="progress-wrap">
                 <input id="progress" type="range" min="0" max="1000" value="0">
