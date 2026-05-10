@@ -4,6 +4,9 @@ import html
 import json
 import time
 import requests
+import base64
+import uuid
+from io import StringIO
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -50,6 +53,16 @@ GITHUB_WORKFLOW_FILE = st.secrets.get(
 GITHUB_ACTION_TOKEN = st.secrets.get(
     "GITHUB_ACTION_TOKEN",
     os.getenv("GITHUB_ACTION_TOKEN", ""),
+)
+
+MANUAL_QUEUE_BRANCH = st.secrets.get(
+    "MANUAL_QUEUE_BRANCH",
+    os.getenv("MANUAL_QUEUE_BRANCH", "data"),
+)
+
+MANUAL_QUEUE_PATH = st.secrets.get(
+    "MANUAL_QUEUE_PATH",
+    os.getenv("MANUAL_QUEUE_PATH", "data/manual_song_queue.csv"),
 )
 
 RETENTION_HOURS = 96  # 4일
@@ -336,14 +349,19 @@ def is_valid_suno_link(url):
         return False, f"링크 확인 중 오류: {e}"
 
 
-def trigger_manual_add_workflow(song_url):
+def queue_manual_song_url(song_url):
     if not GITHUB_ACTION_TOKEN:
         return False, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
+
+    clean_url = str(song_url or "").strip()
+
+    if not clean_url:
+        return False, "Suno 링크를 입력하세요."
 
     api_url = (
         f"https://api.github.com/repos/"
         f"{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
-        f"/actions/workflows/{GITHUB_WORKFLOW_FILE}/dispatches"
+        f"/contents/{MANUAL_QUEUE_PATH}"
     )
 
     headers = {
@@ -352,28 +370,114 @@ def trigger_manual_add_workflow(song_url):
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    payload = {
-        "ref": "main",
-        "inputs": {
-            "mode": "manual_add",
-            "song_url": song_url.strip(),
-        },
-    }
+    columns = [
+        "request_id",
+        "submitted_at",
+        "url",
+        "status",
+        "song_id",
+        "title",
+        "processed_at",
+        "error",
+    ]
 
-    try:
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json=payload,
-            timeout=20,
-        )
+    for attempt in range(3):
+        try:
+            sha = None
 
-        if response.status_code in [200, 201, 202, 204]:
-            return True, "수동 곡 수집 요청을 보냈습니다. Actions 완료 후 데이터 새로고침을 눌러 확인하세요."
+            get_response = requests.get(
+                api_url,
+                headers=headers,
+                params={"ref": MANUAL_QUEUE_BRANCH},
+                timeout=20,
+            )
 
-        return False, f"GitHub Actions 요청 실패: {response.status_code} / {response.text[:500]}"
-    except Exception as e:
-        return False, f"GitHub Actions 요청 중 오류: {e}"
+            if get_response.status_code == 200:
+                payload = get_response.json()
+                sha = payload.get("sha")
+                encoded = payload.get("content", "")
+                decoded = base64.b64decode(encoded).decode("utf-8-sig")
+
+                if decoded.strip():
+                    queue_df = pd.read_csv(StringIO(decoded))
+                else:
+                    queue_df = pd.DataFrame(columns=columns)
+
+            elif get_response.status_code == 404:
+                queue_df = pd.DataFrame(columns=columns)
+            elif get_response.status_code == 403:
+                return False, "GitHub queue 파일 접근 권한이 없습니다. 토큰에 Contents: Read and write 권한이 필요합니다."
+            else:
+                return False, f"GitHub queue 읽기 실패: {get_response.status_code} / {get_response.text[:300]}"
+
+            for col in columns:
+                if col not in queue_df.columns:
+                    queue_df[col] = ""
+
+            queue_df["url"] = queue_df["url"].astype(str)
+            queue_df["status"] = queue_df["status"].astype(str)
+
+            duplicated_pending = queue_df[
+                (queue_df["url"].str.strip() == clean_url)
+                & (queue_df["status"].str.lower().isin(["pending", "queued", ""]))
+            ]
+
+            if not duplicated_pending.empty:
+                return True, "이미 수집 대기열에 있는 링크입니다. 다음 업데이트 때 반영됩니다."
+
+            new_row = {
+                "request_id": str(uuid.uuid4()),
+                "submitted_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                "url": clean_url,
+                "status": "pending",
+                "song_id": "",
+                "title": "",
+                "processed_at": "",
+                "error": "",
+            }
+
+            queue_df = pd.concat(
+                [queue_df, pd.DataFrame([new_row])],
+                ignore_index=True,
+            )
+
+            csv_text = queue_df[columns].to_csv(index=False, encoding="utf-8-sig")
+            content_b64 = base64.b64encode(csv_text.encode("utf-8-sig")).decode("utf-8")
+
+            put_payload = {
+                "message": "Queue manual Suno song",
+                "content": content_b64,
+                "branch": MANUAL_QUEUE_BRANCH,
+            }
+
+            if sha:
+                put_payload["sha"] = sha
+
+            put_response = requests.put(
+                api_url,
+                headers=headers,
+                json=put_payload,
+                timeout=20,
+            )
+
+            if put_response.status_code in [200, 201]:
+                return True, "곡 수집 대기열에 추가했습니다. 다음 업데이트 때 자동 반영됩니다."
+
+            if put_response.status_code == 409:
+                time.sleep(0.7)
+                continue
+
+            if put_response.status_code == 403:
+                return False, "GitHub queue 저장 권한이 없습니다. 토큰에 Contents: Read and write 권한이 필요합니다."
+
+            return False, f"GitHub queue 저장 실패: {put_response.status_code} / {put_response.text[:300]}"
+
+        except Exception as e:
+            if attempt >= 2:
+                return False, f"queue 저장 중 오류: {e}"
+            time.sleep(0.7)
+
+    return False, "동시에 여러 요청이 들어와 queue 저장이 충돌했습니다. 잠시 후 다시 시도하세요."
 
 # ================================
 # Data loading
@@ -2745,7 +2849,7 @@ with right_top:
             if not ok:
                 st.warning(msg)
             else:
-                ok, msg = trigger_manual_add_workflow(manual_suno_url)
+                ok, msg = queue_manual_song_url(manual_suno_url)
 
                 if ok:
                     st.success(msg)
