@@ -33,7 +33,7 @@ FRESHNESS_WEIGHT = 35.0
 FRESHNESS_POWER = 1.35
 
 # 이상치 표시 설정
-OUTLIER_SIGMA = 5.0
+OUTLIER_SIGMA = 6.0
 OUTLIER_USE_LOG = True
 
 
@@ -1637,7 +1637,7 @@ def render_player_ranking(df, hist):
 
             const outlierClass = song.is_outlier ? "outlier-row" : "";
             const outlierBadge = song.is_outlier
-                ? `<span class="outlier-badge" title="${escapeHtml(song.outlier_reasons)}">⚠ 3σ</span>`
+                ? `<span class="outlier-badge" title="${escapeHtml(song.outlier_reasons)}">⚠</span>`
                 : "";
 
             return `
