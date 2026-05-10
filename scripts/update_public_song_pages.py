@@ -88,6 +88,27 @@ def is_contest(song):
         or song.get("download_disabled_reason") == "remix_contest"
     )
 
+def clean_text_field(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (dict, list)):
+        return None
+
+    s = str(value).strip()
+
+    if not s:
+        return None
+
+    if s.lower() in ["nan", "none", "null", "undefined"]:
+        return None
+
+    # Next.js / RSC 참조 토큰 제거: $5b, $12, $abc 같은 값
+    if s.startswith("$") and len(s) <= 8:
+        return None
+
+    return s
+
 
 def flatten_song(song, old_row=None, source="public"):
     metadata = song.get("metadata") or {}
