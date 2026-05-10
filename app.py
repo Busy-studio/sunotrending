@@ -456,9 +456,8 @@ def build_song_payload(df):
 
         lyrics_candidates = []
 
-        # display_tags는 장르/스타일 태그라서 가사창에서 제외
-        # 실제 lyrics 컬럼이 생기면 lyrics를 우선 표시
-        # prompt/gpt_description_prompt는 임시 정보로만 사용
+        # display_tags는 장르/스타일 태그라서 제외
+        # 실제 가사/프롬프트 후보만 표시
         for col in ["lyrics", "prompt", "gpt_description_prompt"]:
             if col in r.index:
                 txt = safe_text(r.get(col, ""))
