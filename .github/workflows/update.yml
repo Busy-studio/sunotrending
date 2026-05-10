@@ -160,6 +160,20 @@ jobs:
         run: |
           python scripts/analyze_comment_quality.py
 
+      - name: Update rank movement
+        env:
+          RANK_MOVEMENT_TOP_N: "200"
+          SONG_RETENTION_DAYS: "4"
+          GROWTH_WINDOW_HOURS: "3"
+          PLAY_WEIGHT: "1.0"
+          LIKE_WEIGHT: "3.0"
+          COMMENT_WEIGHT: "4.0"
+          GROWTH_WEIGHT: "2.5"
+          FRESHNESS_WEIGHT: "35.0"
+          FRESHNESS_POWER: "1.35"
+        run: |
+          python scripts/update_rank_movement.py
+
       - name: Validate CSV after comment quality
         run: |
           echo "After comment quality analysis:"
