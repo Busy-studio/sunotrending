@@ -2429,7 +2429,7 @@ def render_player_ranking(df, hist):
 # Main
 # ================================
 
-st.title("Suno Trending v1.0")
+st.title("Suno Trending v1.01")
 st.caption("최근 4일 생성곡 기준으로 누적 반응,  최근 변화량 등 반영")
 
 if st.button("데이터 새로고침"):
