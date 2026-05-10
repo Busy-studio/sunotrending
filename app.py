@@ -714,6 +714,7 @@ def build_song_payload(df):
         songs.append({
             "rank": int(r.get("rank", 0)),
             "rank_change": safe_float_or_none(r.get("rank_change", None)),
+            "rank_status": safe_text(r.get("rank_status", "")),
             "previous_rank": safe_int_or_none(r.get("previous_rank", None)),
             "current_rank_saved": safe_int_or_none(r.get("current_rank", None)),
             "id": safe_text(r.get("id", "")),
@@ -1007,6 +1008,12 @@ def render_player_ranking(df, hist):
 
     .rank-down {
         color: #2563eb;
+    }
+
+    .rank-new {
+        color: #16a34a;
+        font-weight: 950;
+        letter-spacing: 0.02em;
     }
 
     .rank-same {
@@ -1724,7 +1731,11 @@ def render_player_ranking(df, hist):
         return `${m}:${String(s).padStart(2, "0")}`;        
     }
 
-    function renderRankChange(value) {
+    function renderRankChange(value, status) {
+        if (status === "new") {
+            return `<span class="rank-new">NEW</span>`;
+        }
+
         if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) {
             return `<span class="rank-same">-</span>`;
         }
@@ -1876,7 +1887,7 @@ def render_player_ranking(df, hist):
                         <button class="add-btn" data-action="toggle-playlist" data-song-id="${escapeHtml(song.id)}" title="선택 / 해제">+</button>
                     </td>
                     <td class="rank">${song.rank}</td>
-                    <td class="rank-change">${renderRankChange(song.rank_change)}</td>
+                    <td class="rank-change">${renderRankChange(song.rank_change, song.rank_status)}</td>
                     <td>
                         <div class="cover-cell">
                             <button class="cover-btn" data-action="cover-click" data-song-id="${escapeHtml(song.id)}" title="재생 / 일시정지">
