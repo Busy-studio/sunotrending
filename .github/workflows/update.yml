@@ -20,6 +20,11 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Sync latest main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -67,8 +72,5 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update encrypted Suno data"
-
-            # 원격에 새 commit이 있으면 먼저 받아서 내 commit을 rebase한 뒤 push
-            git pull --rebase origin main
             git push origin main
           fi
