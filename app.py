@@ -167,6 +167,32 @@ def safe_url(value):
 
     return s
 
+def safe_float_or_none(value):
+    try:
+        if pd.isna(value):
+            return None
+
+        s = str(value).strip()
+
+        if s.lower() in ["", "nan", "none", "<na>", "null", "-"]:
+            return None
+
+        return float(s)
+    except Exception:
+        return None
+
+
+def safe_int_or_none(value):
+    try:
+        f = safe_float_or_none(value)
+
+        if f is None:
+            return None
+
+        return int(f)
+    except Exception:
+        return None
+
 
 def normalize_handle(value):
     handle = safe_text(value)
@@ -560,9 +586,9 @@ def build_song_payload(df):
 
         songs.append({
             "rank": int(r.get("rank", 0)),
-            "rank_change": None if pd.isna(r.get("rank_change", pd.NA)) else float(r.get("rank_change", 0)),
-            "previous_rank": None if pd.isna(r.get("previous_rank", pd.NA)) else int(float(r.get("previous_rank", 0))),
-            "current_rank_saved": None if pd.isna(r.get("current_rank", pd.NA)) else int(float(r.get("current_rank", 0))),
+            "rank_change": safe_float_or_none(r.get("rank_change", None)),
+            "previous_rank": safe_int_or_none(r.get("previous_rank", None)),
+            "current_rank_saved": safe_int_or_none(r.get("current_rank", None)),
             "id": safe_text(r.get("id", "")),
             "title": safe_text(r.get("title", "Untitled")) or "Untitled",
             "creator": display_name,
