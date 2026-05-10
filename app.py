@@ -345,42 +345,92 @@ def add_growth_features(db, hist, window_hours):
     if hist.empty or "id" not in hist.columns or "checked_at" not in hist.columns:
         return db
 
-    now = pd.Timestamp.now(tz="UTC")
-    cutoff = now - pd.Timedelta(hours=window_hours)
-
-    recent = hist[hist["checked_at"] >= cutoff].copy()
-
-    if recent.empty:
+    if "id" not in db.columns:
         return db
+
+    hist = hist.copy()
+    hist["id"] = hist["id"].astype(str)
+    hist["checked_at"] = pd.to_datetime(hist["checked_at"], errors="coerce", utc=True)
+
+    for col in ["play_count", "upvote_count", "comment_count"]:
+        if col in hist.columns:
+            hist[col] = pd.to_numeric(hist[col], errors="coerce").fillna(0)
+        else:
+            hist[col] = 0
+
+    db_created = db[["id", "created_at"]].copy()
+    db_created["id"] = db_created["id"].astype(str)
+
+    if "created_at" in db_created.columns:
+        db_created["created_at"] = pd.to_datetime(db_created["created_at"], errors="coerce", utc=True)
+    else:
+        db_created["created_at"] = pd.NaT
+
+    hist = hist.merge(db_created, on="id", how="left")
 
     agg_rows = []
 
-    for song_id, g in recent.groupby("id"):
-        g = g.sort_values("checked_at")
+    for song_id, g in hist.groupby("id"):
+        g = g.sort_values("checked_at").copy()
 
-        if len(g) < 2:
+        if g.empty:
             continue
 
-        first = g.iloc[0]
-        last = g.iloc[-1]
+        created_at = g["created_at"].dropna()
+
+        if created_at.empty:
+            continue
+
+        created_at = created_at.iloc[0]
+
+        # 생성 후 3시간이 지난 시점을 성장 기준점으로 잡음
+        anchor_time = created_at + pd.Timedelta(hours=window_hours)
+
+        # 생성 후 3시간 이후의 히스토리만 사용
+        after_anchor = g[g["checked_at"] >= anchor_time].copy()
+
+        if len(after_anchor) < 2:
+            continue
+
+        first = after_anchor.iloc[0]
+        last = after_anchor.iloc[-1]
 
         hours = (last["checked_at"] - first["checked_at"]).total_seconds() / 3600
 
         if hours <= 0:
-            hours = max(window_hours, 1)
+            continue
 
-        play_delta = max(0, float(last.get("play_count", 0)) - float(first.get("play_count", 0)))
-        upvote_delta = max(0, float(last.get("upvote_count", 0)) - float(first.get("upvote_count", 0)))
-        comment_delta = max(0, float(last.get("comment_count", 0)) - float(first.get("comment_count", 0)))
+        play_delta_total = max(
+            0,
+            float(last.get("play_count", 0)) - float(first.get("play_count", 0))
+        )
+        upvote_delta_total = max(
+            0,
+            float(last.get("upvote_count", 0)) - float(first.get("upvote_count", 0))
+        )
+        comment_delta_total = max(
+            0,
+            float(last.get("comment_count", 0)) - float(first.get("comment_count", 0))
+        )
+
+        play_velocity = play_delta_total / hours
+        upvote_velocity = upvote_delta_total / hours
+        comment_velocity = comment_delta_total / hours
+
+        # 기존 growth 공식은 "window_hours 동안의 증가량"을 기대하니까,
+        # 기울기(per hour)를 다시 3시간 증가량 환산값으로 바꿔 넣음
+        play_delta_window = play_velocity * window_hours
+        upvote_delta_window = upvote_velocity * window_hours
+        comment_delta_window = comment_velocity * window_hours
 
         agg_rows.append({
             "id": str(song_id),
-            "play_delta_window": play_delta,
-            "upvote_delta_window": upvote_delta,
-            "comment_delta_window": comment_delta,
-            "play_velocity_per_hour": play_delta / hours,
-            "upvote_velocity_per_hour": upvote_delta / hours,
-            "comment_velocity_per_hour": comment_delta / hours,
+            "play_delta_window": play_delta_window,
+            "upvote_delta_window": upvote_delta_window,
+            "comment_delta_window": comment_delta_window,
+            "play_velocity_per_hour": play_velocity,
+            "upvote_velocity_per_hour": upvote_velocity,
+            "comment_velocity_per_hour": comment_velocity,
         })
 
     if not agg_rows:
@@ -397,8 +447,13 @@ def add_growth_features(db, hist, window_hours):
         "upvote_velocity_per_hour",
         "comment_velocity_per_hour",
     ]:
-        if col in db.columns:
-            db[col] = db[col].fillna(0)
+        growth_col = f"{col}_growth"
+
+        if growth_col in db.columns:
+            db[col] = db[growth_col].fillna(db[col])
+            db = db.drop(columns=[growth_col], errors="ignore")
+
+        db[col] = db[col].fillna(0)
 
     return db
 
