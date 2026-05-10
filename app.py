@@ -50,7 +50,7 @@ def broken_score(s: str) -> int:
 
     bad_markers = [
         "Ã", "ã", "Â", "â", "ð", "Ð", "Ñ", "Î", "Ï",
-        "ç", "è", "é", "ê", "ë", "í", "ì", "Å", " ",
+        "ç", "è", "é", "ê", "ë", "í", "ì", "Å", "�",
     ]
 
     score = sum(s.count(ch) * 3 for ch in bad_markers)
@@ -449,34 +449,8 @@ def filter_view(df):
 # UI data
 # ================================
 
-def build_song_payload(df, hist=None):
+def build_song_payload(df):
     songs = []
-    history_map = {}
-
-    if hist is not None and not hist.empty and "id" in hist.columns and "checked_at" in hist.columns:
-        hist_view = hist.copy()
-        hist_view = hist_view.dropna(subset=["checked_at"])
-
-        for song_id, g in hist_view.groupby("id"):
-            g = g.sort_values("checked_at")
-            points = []
-
-            for _, h in g.iterrows():
-                checked_at = h.get("checked_at")
-
-                if pd.notna(checked_at):
-                    checked_txt = checked_at.strftime("%Y-%m-%d %H:%M UTC")
-                else:
-                    checked_txt = "-"
-
-                points.append({
-                    "checked_at": checked_txt,
-                    "play_count": int(float(h.get("play_count", 0) or 0)),
-                    "upvote_count": int(float(h.get("upvote_count", 0) or 0)),
-                    "comment_count": int(float(h.get("comment_count", 0) or 0)),
-                })
-
-            history_map[str(song_id)] = points[-80:]
 
     for _, r in df.iterrows():
         display_name, handle_text = build_creator_display(
@@ -508,11 +482,10 @@ def build_song_payload(df, hist=None):
                     lyrics_candidates.append(txt)
 
         lyrics_text = "\n\n".join(lyrics_candidates)
-        song_id = safe_text(r.get("id", ""))
 
         songs.append({
             "rank": int(r.get("rank", 0)),
-            "id": song_id,
+            "id": safe_text(r.get("id", "")),
             "title": safe_text(r.get("title", "Untitled")) or "Untitled",
             "creator": display_name,
             "handle": handle_text,
@@ -524,27 +497,6 @@ def build_song_payload(df, hist=None):
             "audio_url": safe_url(r.get("audio_url", "")),
             "image_url": safe_url(r.get("image_url", "")),
             "lyrics": lyrics_text,
-            "trend_score": round(float(r.get("trend_score", 0) or 0), 4),
-            "base_score": round(float(r.get("base_score", 0) or 0), 4),
-            "growth_score": round(float(r.get("growth_score", 0) or 0), 4),
-            "freshness_score": round(float(r.get("freshness_score", 0) or 0), 4),
-            "growth_score_raw": round(float(r.get("growth_score_raw", 0) or 0), 4),
-            "age_hours": round(float(r.get("age_hours", 0) or 0), 2),
-            "freshness": round(float(r.get("freshness", 0) or 0), 4),
-            "play_delta_window": round(float(r.get("play_delta_window", 0) or 0), 2),
-            "upvote_delta_window": round(float(r.get("upvote_delta_window", 0) or 0), 2),
-            "comment_delta_window": round(float(r.get("comment_delta_window", 0) or 0), 2),
-            "ranking_config": {
-                "play_weight": PLAY_WEIGHT,
-                "like_weight": LIKE_WEIGHT,
-                "comment_weight": COMMENT_WEIGHT,
-                "growth_weight": GROWTH_WEIGHT,
-                "freshness_weight": FRESHNESS_WEIGHT,
-                "growth_window_hours": GROWTH_WINDOW_HOURS,
-                "retention_hours": RETENTION_HOURS,
-                "freshness_power": FRESHNESS_POWER,
-            },
-            "history": history_map.get(song_id, []),
         })
 
     return songs
@@ -554,8 +506,8 @@ def build_song_payload(df, hist=None):
 # Player + ranking component
 # ================================
 
-def render_player_ranking(df, hist=None):
-    songs = build_song_payload(df, hist)
+def render_player_ranking(df):
+    songs = build_song_payload(df)
     songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
 
     html_template = """
@@ -572,7 +524,9 @@ def render_player_ranking(df, hist=None):
         --soft: #f3f4f6;
     }
 
-    * { box-sizing: border-box; }
+    * {
+        box-sizing: border-box;
+    }
 
     html, body {
         margin: 0;
@@ -580,9 +534,16 @@ def render_player_ranking(df, hist=None):
         background: var(--bg);
         color: var(--text);
         font-family:
-            "Noto Sans KR", "Noto Sans", "Apple SD Gothic Neo", "Malgun Gothic",
-            "Segoe UI", "Segoe UI Symbol", "Apple Color Emoji", "Noto Color Emoji",
-            Arial, sans-serif;
+            "Noto Sans KR",
+            "Noto Sans",
+            "Apple SD Gothic Neo",
+            "Malgun Gothic",
+            "Segoe UI",
+            "Segoe UI Symbol",
+            "Apple Color Emoji",
+            "Noto Color Emoji",
+            Arial,
+            sans-serif;
     }
 
     .app-shell {
@@ -613,163 +574,461 @@ def render_player_ranking(df, hist=None):
         background: #e5e7eb;
         margin-bottom: 12px;
         position: relative;
+    }
+
+    .now-cover {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+    }
+
+    .now-placeholder {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        font-size: 13px;
+    }
+
+    .now-title {
+        font-size: 18px;
+        font-weight: 850;
+        line-height: 1.25;
+        margin-bottom: 4px;
+        word-break: break-word;
+    }
+
+    .now-creator {
+        font-size: 13px;
+        color: var(--muted);
+        margin-bottom: 10px;
+        word-break: break-word;
+    }
+
+    .progress-wrap {
+        margin: 10px 0 8px 0;
+    }
+
+    .time-row {
+        display: flex;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 4px;
+    }
+
+    input[type="range"] {
+        width: 100%;
+        accent-color: var(--accent);
+    }
+
+    .control-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        justify-content: center;
+        margin: 10px 0;
+    }
+
+    .ctrl-btn {
+        border: 1px solid var(--line-dark);
+        background: #ffffff;
+        color: var(--text);
+        border-radius: 999px;
+        min-width: 38px;
+        height: 38px;
+        cursor: pointer;
+        font-weight: 800;
+        font-size: 14px;
+    }
+
+    .ctrl-btn.main {
+        background: var(--accent);
+        color: white;
+        border-color: var(--accent);
+        min-width: 46px;
+        height: 46px;
+        font-size: 16px;
+    }
+
+    .ctrl-btn.active {
+        background: #fee2e2;
+        border-color: var(--accent);
+        color: var(--accent-dark);
+    }
+
+    .ctrl-btn:hover {
+        border-color: var(--accent);
+    }
+
+    .small-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 12px;
+    }
+
+    .small-btn {
+        border: 1px solid var(--line-dark);
+        background: white;
+        color: var(--text);
+        border-radius: 10px;
+        padding: 8px 9px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 700;
+    }
+
+    .small-btn.active {
+        background: #fee2e2;
+        color: var(--accent-dark);
+        border-color: var(--accent);
+    }
+
+    .volume-row {
+        display: grid;
+        grid-template-columns: 54px 1fr 42px;
+        gap: 8px;
+        align-items: center;
+        font-size: 12px;
+        color: var(--muted);
+        margin: 8px 0 12px 0;
+    }
+
+    .playlist-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 12px 0 8px 0;
+    }
+
+    .playlist-title {
+        font-size: 14px;
+        font-weight: 850;
+    }
+
+    .playlist-count {
+        font-size: 12px;
+        color: var(--muted);
+    }
+
+    .playlist {
+        border: 1px solid var(--line);
+        background: #ffffff;
+        border-radius: 12px;
+        overflow-y: auto;
+        height: 260px;
+    }
+
+    .playlist-empty {
+        color: var(--muted);
+        font-size: 12px;
+        padding: 14px;
+        line-height: 1.5;
+    }
+
+    .playlist-item {
+        display: grid;
+        grid-template-columns: 34px 1fr 28px;
+        gap: 8px;
+        align-items: center;
+        padding: 8px;
+        border-bottom: 1px solid var(--line);
         cursor: pointer;
     }
 
-    .now-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .playlist-item:last-child {
+        border-bottom: 0;
+    }
 
-    .now-cover-wrap.has-track::after {
-        content: "▶";
-        position: absolute;
-        right: 12px;
-        bottom: 12px;
-        width: 42px;
-        height: 42px;
-        border-radius: 999px;
-        background: rgba(0,0,0,0.72);
-        color: white;
-        font-size: 19px;
-        line-height: 42px;
-        text-align: center;
+    .playlist-item.active {
+        background: #fee2e2;
+    }
+
+    .playlist-thumb {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        object-fit: cover;
+        background: #e5e7eb;
+    }
+
+    .playlist-meta {
+        overflow: hidden;
+    }
+
+    .playlist-song-title {
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .playlist-song-sub {
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .remove-btn {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+    }
+
+    .lyrics-panel {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 10px;
+        height: 210px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #374151;
+    }
+
+    .lyrics-panel.empty {
+        color: var(--muted);
+    }
+
+    .ranking-panel {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        overflow: hidden;
+        background: #ffffff;
+    }
+
+    .ranking-topbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 12px;
+        background: #ffffff;
+        border-bottom: 1px solid var(--line);
+    }
+
+    .ranking-title {
+        font-size: 16px;
         font-weight: 900;
     }
 
-    .now-cover-wrap.has-track.playing::after { content: "Ⅱ"; }
-
-    .now-placeholder {
-        width: 100%; height: 100%; display: grid; place-items: center;
-        color: var(--muted); font-size: 13px;
+    .ranking-sub {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 2px;
     }
 
-    .now-title { font-size: 18px; font-weight: 850; line-height: 1.25; margin-bottom: 4px; word-break: break-word; }
-    .now-creator { font-size: 13px; color: var(--muted); margin-bottom: 10px; word-break: break-word; }
-    .progress-wrap { margin: 10px 0 8px 0; }
-    .time-row { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 4px; }
-    input[type="range"] { width: 100%; accent-color: var(--accent); }
-
-    .control-row { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 10px 0; }
-    .ctrl-btn {
-        border: 1px solid var(--line-dark); background: #ffffff; color: var(--text);
-        border-radius: 999px; min-width: 38px; height: 38px; cursor: pointer;
-        font-weight: 800; font-size: 14px;
+    .search-input {
+        border: 1px solid var(--line-dark);
+        border-radius: 999px;
+        padding: 9px 13px;
+        min-width: 240px;
+        outline: none;
     }
-    .ctrl-btn.main { background: var(--accent); color: white; border-color: var(--accent); min-width: 46px; height: 46px; font-size: 16px; }
-    .ctrl-btn.active { background: #fee2e2; border-color: var(--accent); color: var(--accent-dark); }
-    .ctrl-btn:hover { border-color: var(--accent); }
 
-    .small-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-    .small-btn {
-        border: 1px solid var(--line-dark); background: white; color: var(--text);
-        border-radius: 10px; padding: 8px 9px; cursor: pointer; font-size: 12px; font-weight: 700;
+    .search-input:focus {
+        border-color: var(--accent);
     }
-    .small-btn.active { background: #fee2e2; color: var(--accent-dark); border-color: var(--accent); }
 
-    .volume-row { display: grid; grid-template-columns: 54px 1fr 42px; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); margin: 8px 0 12px 0; }
-    .playlist-head { display: flex; justify-content: space-between; align-items: center; margin: 12px 0 8px 0; }
-    .playlist-title { font-size: 14px; font-weight: 850; }
-    .playlist-count { font-size: 12px; color: var(--muted); }
-    .playlist { border: 1px solid var(--line); background: #ffffff; border-radius: 12px; overflow-y: auto; height: 260px; }
-    .playlist-empty { color: var(--muted); font-size: 12px; padding: 14px; line-height: 1.5; }
-    .playlist-item { display: grid; grid-template-columns: 34px 1fr 28px; gap: 8px; align-items: center; padding: 8px; border-bottom: 1px solid var(--line); cursor: pointer; }
-    .playlist-item:last-child { border-bottom: 0; }
-    .playlist-item.active { background: #fee2e2; }
-    .playlist-thumb { width: 34px; height: 34px; border-radius: 8px; object-fit: cover; background: #e5e7eb; }
-    .playlist-meta { overflow: hidden; }
-    .playlist-song-title { font-size: 12px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .playlist-song-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .remove-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; }
-
-    .lyrics-panel { margin-top: 10px; border: 1px solid var(--line); background: #ffffff; border-radius: 12px; padding: 10px; height: 210px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; line-height: 1.45; color: #374151; }
-    .lyrics-panel.empty { color: var(--muted); }
-
-    .ranking-panel { min-width: 0; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: #ffffff; }
-    .ranking-topbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px; background: #ffffff; border-bottom: 1px solid var(--line); }
-    .ranking-title { font-size: 16px; font-weight: 900; }
-    .ranking-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-    .search-input { border: 1px solid var(--line-dark); border-radius: 999px; padding: 9px 13px; min-width: 240px; outline: none; }
-    .search-input:focus { border-color: var(--accent); }
-
-    .table-wrap { width: 100%; overflow-x: auto; max-height: 1120px; overflow-y: auto; }
-    table.song-table { width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed; color: var(--text); }
-    .song-table th { text-align: left; padding: 11px 8px; border-bottom: 1px solid var(--line-dark); background: var(--soft); position: sticky; top: 0; z-index: 2; font-weight: 800; color: var(--text); }
-    .song-table td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; color: var(--text); }
-    .song-table tr:hover { background: #f9fafb; }
-
-    .rank-wrap { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-    .rank { font-weight: 850; font-size: 16px; text-align: right; min-width: 28px; }
-    .select-btn {
-        border: 1px solid var(--line-dark); background: #ffffff; color: var(--muted);
-        border-radius: 7px; width: 24px; height: 24px; cursor: pointer;
-        font-size: 15px; line-height: 20px; font-weight: 900; padding: 0;
+    .table-wrap {
+        width: 100%;
+        overflow-x: auto;
+        max-height: 1120px;
+        overflow-y: auto;
     }
-    .select-btn.added { color: white; background: var(--accent); border-color: var(--accent); }
 
-    .cover-cell { display: flex; gap: 7px; align-items: center; }
-    .cover-btn { border: 0; padding: 0; margin: 0; background: transparent; cursor: pointer; position: relative; width: 56px; height: 56px; display: block; flex-shrink: 0; }
-    .cover { width: 56px; height: 56px; object-fit: cover; border-radius: 10px; background: #e5e7eb; display: block; }
+    table.song-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+        table-layout: fixed;
+        color: var(--text);
+    }
+
+    .song-table th {
+        text-align: left;
+        padding: 11px 8px;
+        border-bottom: 1px solid var(--line-dark);
+        background: var(--soft);
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        font-weight: 800;
+        color: var(--text);
+    }
+
+    .song-table td {
+        padding: 8px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: middle;
+        color: var(--text);
+    }
+
+    .song-table tr:hover {
+        background: #f9fafb;
+    }
+
+    .rank {
+        font-weight: 850;
+        font-size: 16px;
+        text-align: right;
+    }
+
+    .cover-cell {
+        display: flex;
+        gap: 7px;
+        align-items: center;
+    }
+
+    .cover-btn {
+        border: 0;
+        padding: 0;
+        margin: 0;
+        background: transparent;
+        cursor: pointer;
+        position: relative;
+        width: 56px;
+        height: 56px;
+        display: block;
+        flex-shrink: 0;
+    }
+
+    .cover {
+        width: 56px;
+        height: 56px;
+        object-fit: cover;
+        border-radius: 10px;
+        background: #e5e7eb;
+        display: block;
+    }
+
     .cover-btn::after {
-        content: "▶"; position: absolute; right: 4px; bottom: 4px; width: 20px; height: 20px;
-        border-radius: 999px; background: rgba(0,0,0,0.72); color: white; font-size: 11px;
-        line-height: 20px; text-align: center; font-weight: 800;
+        content: "▶";
+        position: absolute;
+        right: 4px;
+        bottom: 4px;
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        background: rgba(0,0,0,0.72);
+        color: white;
+        font-size: 11px;
+        line-height: 20px;
+        text-align: center;
+        font-weight: 800;
     }
-    .cover-btn.playing::after { content: "Ⅱ"; }
-    .cover-btn.paused::after { content: "▶"; }
 
-    .title-cell { overflow: hidden; word-break: break-word; color: var(--text); }
-    .title-link { font-weight: 850; text-decoration: none; color: var(--text); display: inline-block; max-width: 100%; white-space: normal; line-height: 1.35; }
-    .title-link:hover { text-decoration: underline; color: var(--accent); }
-    .subtle { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.25; }
-    .creator { line-height: 1.35; word-break: break-word; color: var(--text); }
-    .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text); }
-    .info-btn { border: 1px solid var(--line-dark); background: #fff; color: var(--text); border-radius: 999px; padding: 6px 9px; cursor: pointer; font-size: 12px; font-weight: 800; white-space: nowrap; }
-    .info-btn:hover { border-color: var(--accent); color: var(--accent-dark); }
+    .add-btn {
+        border: 1px solid var(--line-dark);
+        background: #ffffff;
+        color: var(--text);
+        border-radius: 8px;
+        width: 32px;
+        height: 32px;
+        cursor: pointer;
+        font-weight: 900;
+    }
 
-    .footer-credit { margin: 16px 0 0 0; padding: 14px; text-align: center; color: var(--muted); font-size: 12px; }
-    .footer-credit a { color: var(--accent-dark); font-weight: 850; text-decoration: none; }
-    .footer-credit a:hover { text-decoration: underline; }
+    .add-btn.added {
+        color: white;
+        background: var(--accent);
+        border-color: var(--accent);
+    }
 
-    .modal-backdrop { position: fixed; inset: 0; background: rgba(17, 24, 39, 0.52); z-index: 50; display: none; align-items: center; justify-content: center; padding: 18px; }
-    .modal-backdrop.open { display: flex; }
-    .modal-card { width: min(860px, 96vw); max-height: 90vh; overflow-y: auto; background: white; border-radius: 18px; border: 1px solid var(--line); box-shadow: 0 20px 50px rgba(0,0,0,0.2); }
-    .modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 16px; border-bottom: 1px solid var(--line); }
-    .modal-title { font-size: 18px; font-weight: 900; line-height: 1.25; }
-    .modal-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
-    .modal-close { border: 0; background: transparent; font-size: 28px; line-height: 1; cursor: pointer; color: var(--muted); }
-    .modal-body { padding: 16px; }
-    .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
-    .score-card { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #fafafa; }
-    .score-label { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
-    .score-value { font-size: 18px; font-weight: 900; font-variant-numeric: tabular-nums; }
-    .formula-box { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: #fff; font-size: 12px; line-height: 1.55; color: #374151; margin-bottom: 14px; }
-    .chart-box { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #fff; overflow-x: auto; }
-    .chart-legend { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 12px; margin-top: 8px; }
-    .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 4px; background: #111827; }
-    .legend-dot.likes { background: #6b7280; }
-    .legend-dot.comments { background: #9ca3af; }
+    .title-cell {
+        overflow: hidden;
+        word-break: break-word;
+        color: var(--text);
+    }
+
+    .title-link {
+        font-weight: 850;
+        text-decoration: none;
+        color: var(--text);
+        display: inline-block;
+        max-width: 100%;
+        white-space: normal;
+        line-height: 1.35;
+    }
+
+    .title-link:hover {
+        text-decoration: underline;
+        color: var(--accent);
+    }
+
+    .subtle {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 4px;
+        line-height: 1.25;
+    }
+
+    .creator {
+        line-height: 1.35;
+        word-break: break-word;
+        color: var(--text);
+    }
+
+    .num {
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+    }
 
     @media (max-width: 980px) {
-        .app-shell { grid-template-columns: 1fr; }
-        .player-panel { position: relative; height: auto; max-height: none; }
-        .playlist { height: 220px; }
-        .lyrics-panel { height: 180px; }
-        .score-grid { grid-template-columns: repeat(2, 1fr); }
+        .app-shell {
+            grid-template-columns: 1fr;
+        }
+
+        .player-panel {
+            position: relative;
+            height: auto;
+            max-height: none;
+        }
+
+        .playlist {
+            height: 220px;
+        }
+
+        .lyrics-panel {
+            height: 180px;
+        }
     }
     </style>
 
     <div class="app-shell">
         <aside class="player-panel">
-            <div class="now-cover-wrap" id="nowCoverWrap" onclick="togglePlay()">
+            <div class="now-cover-wrap" id="nowCoverWrap">
                 <div class="now-placeholder">No track selected</div>
             </div>
 
             <div class="now-title" id="nowTitle">플레이리스트에 곡을 추가하세요</div>
-            <div class="now-creator" id="nowCreator">앨범 이미지나 체크 버튼을 누르면 추가됩니다.</div>
+            <div class="now-creator" id="nowCreator">앨범 이미지나 + 버튼을 누르면 추가됩니다.</div>
 
-            <div class="lyrics-panel empty" id="lyricsPanel">가사/프롬프트 정보가 있으면 여기에 표시됩니다.</div>
+            <div class="lyrics-panel empty" id="lyricsPanel">
+                가사/프롬프트 정보가 있으면 여기에 표시됩니다.
+            </div>
 
             <div class="progress-wrap">
                 <input id="progress" type="range" min="0" max="1000" value="0">
-                <div class="time-row"><span id="currentTime">0:00</span><span id="duration">0:00</span></div>
+                <div class="time-row">
+                    <span id="currentTime">0:00</span>
+                    <span id="duration">0:00</span>
+                </div>
             </div>
 
             <div class="control-row">
@@ -784,28 +1043,35 @@ def render_player_ranking(df, hist=None):
             </div>
 
             <div class="small-actions">
-                <button class="small-btn" id="orderedBtn">순차 재생</button>
-                <button class="small-btn" id="shuffleBtn">랜덤 재생</button>
-            </div>
-
-            <div class="small-actions">
                 <button class="small-btn" id="clearBtn">Playlist clear</button>
-                <button class="small-btn" id="removeCurrentBtn">Remove current</button>
+                <button class="small-btn" id="openBtn">Open Suno</button>
             </div>
 
-            <div class="volume-row"><span>Volume</span><input id="volume" type="range" min="0" max="100" value="80"><span id="volumeText">80%</span></div>
+            <div class="volume-row">
+                <span>Volume</span>
+                <input id="volume" type="range" min="0" max="100" value="80">
+                <span id="volumeText">80%</span>
+            </div>
 
-            <div class="playlist-head"><div class="playlist-title">Playlist</div><div class="playlist-count" id="playlistCount">0 tracks</div></div>
+            <div class="playlist-head">
+                <div class="playlist-title">Playlist</div>
+                <div class="playlist-count" id="playlistCount">0 tracks</div>
+            </div>
+
             <div class="playlist" id="playlist">
-                <div class="playlist-empty">아직 플레이리스트가 비어 있습니다.<br>오른쪽 랭킹에서 앨범 이미지나 체크 버튼을 눌러 추가하세요.</div>
+                <div class="playlist-empty">
+                    아직 플레이리스트가 비어 있습니다.<br>
+                    오른쪽 랭킹에서 앨범 이미지나 + 버튼을 눌러 추가하세요.
+                </div>
             </div>
+
         </aside>
 
         <main class="ranking-panel">
             <div class="ranking-topbar">
                 <div>
                     <div class="ranking-title">Top 200 Trending</div>
-                    <div class="ranking-sub">앨범 이미지를 누르면 재생/일시정지, 체크 버튼은 플레이리스트 선택/해제입니다.</div>
+                    <div class="ranking-sub">앨범 이미지를 누르면 플레이리스트에 추가하고 바로 재생합니다.</div>
                 </div>
                 <input class="search-input" id="searchInput" placeholder="Search title / creator / handle">
             </div>
@@ -814,14 +1080,13 @@ def render_player_ranking(df, hist=None):
                 <table class="song-table">
                     <thead>
                         <tr>
-                            <th style="width:76px; text-align:right;">선택/순위</th>
-                            <th style="width:74px;">앨범</th>
+                            <th style="width:44px; text-align:right;">순위</th>
+                            <th style="width:112px;">앨범</th>
                             <th>곡 제목</th>
                             <th style="width:210px;">원작자</th>
                             <th style="width:90px; text-align:right;">플레이</th>
                             <th style="width:90px; text-align:right;">좋아요</th>
                             <th style="width:80px; text-align:right;">댓글</th>
-                            <th style="width:104px; text-align:center;">랭킹정보</th>
                         </tr>
                     </thead>
                     <tbody id="songTableBody"></tbody>
@@ -830,27 +1095,13 @@ def render_player_ranking(df, hist=None):
         </main>
     </div>
 
-    <div class="footer-credit">This page was created by <a href="https://suno.com/@busystudio" target="_blank" rel="noopener noreferrer">Busy Studio</a>.</div>
-
-    <div class="modal-backdrop" id="rankingModal" onclick="closeRankingInfo(event)">
-        <div class="modal-card" onclick="event.stopPropagation()">
-            <div class="modal-head">
-                <div>
-                    <div class="modal-title" id="modalTitle">Ranking Info</div>
-                    <div class="modal-sub" id="modalSub"></div>
-                </div>
-                <button class="modal-close" onclick="closeRankingInfo()">×</button>
-            </div>
-            <div class="modal-body" id="modalBody"></div>
-        </div>
-    </div>
-
     <script>
     const songs = __SONGS_JSON__;
 
     let playlist = [];
     let currentIndex = -1;
     let audio = new Audio();
+
     let repeatOne = false;
     let repeatAll = true;
 
@@ -860,15 +1111,14 @@ def render_player_ranking(df, hist=None):
     const playlistEl = document.getElementById("playlist");
     const playlistCount = document.getElementById("playlistCount");
     const lyricsPanel = document.getElementById("lyricsPanel");
+
     const playBtn = document.getElementById("playBtn");
     const prevBtn = document.getElementById("prevBtn");
     const nextBtn = document.getElementById("nextBtn");
     const repeatOneBtn = document.getElementById("repeatOneBtn");
     const repeatAllBtn = document.getElementById("repeatAllBtn");
-    const orderedBtn = document.getElementById("orderedBtn");
-    const shuffleBtn = document.getElementById("shuffleBtn");
     const clearBtn = document.getElementById("clearBtn");
-    const removeCurrentBtn = document.getElementById("removeCurrentBtn");
+    const openBtn = document.getElementById("openBtn");
     const volume = document.getElementById("volume");
     const volumeText = document.getElementById("volumeText");
     const progress = document.getElementById("progress");
@@ -876,42 +1126,33 @@ def render_player_ranking(df, hist=None):
     const durationEl = document.getElementById("duration");
     const searchInput = document.getElementById("searchInput");
     const songTableBody = document.getElementById("songTableBody");
-    const rankingModal = document.getElementById("rankingModal");
-    const modalTitle = document.getElementById("modalTitle");
-    const modalSub = document.getElementById("modalSub");
-    const modalBody = document.getElementById("modalBody");
 
     function escapeHtml(text) {
         if (text === null || text === undefined) return "";
-        return String(text).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-    }
 
-    function jsString(text) {
-        return String(text ?? "").replaceAll("\\", "\\\\").replaceAll("'", "\\'").replaceAll("\n", "\\n").replaceAll("\r", "");
+        return String(text)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
     }
 
     function formatInt(n) {
-        try { return Number(n || 0).toLocaleString(); } catch (e) { return "0"; }
-    }
-
-    function formatNum(n, digits = 2) {
-        const value = Number(n || 0);
-        return value.toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
+        try {
+            return Number(n || 0).toLocaleString();
+        } catch (e) {
+            return "0";
+        }
     }
 
     function formatTime(sec) {
         if (!isFinite(sec) || sec < 0) return "0:00";
+
         const m = Math.floor(sec / 60);
         const s = Math.floor(sec % 60);
+
         return `${m}:${String(s).padStart(2, "0")}`;
-    }
-
-    function isCurrentSong(song) {
-        return currentIndex >= 0 && playlist[currentIndex] && String(playlist[currentIndex].id) === String(song.id);
-    }
-
-    function isPlayingSong(song) {
-        return isCurrentSong(song) && !audio.paused;
     }
 
     function updateVolume() {
@@ -922,9 +1163,16 @@ def render_player_ranking(df, hist=None):
 
     function renderTable(filterText = "") {
         const q = filterText.trim().toLowerCase();
+
         const filtered = songs.filter(song => {
             if (!q) return true;
-            const hay = [song.title, song.creator, song.handle].join(" ").toLowerCase();
+
+            const hay = [
+                song.title,
+                song.creator,
+                song.handle
+            ].join(" ").toLowerCase();
+
             return hay.includes(q);
         });
 
@@ -932,91 +1180,94 @@ def render_player_ranking(df, hist=None):
             const imageHtml = song.image_url
                 ? `<img class="cover" src="${escapeHtml(song.image_url)}" loading="lazy">`
                 : `<div class="cover"></div>`;
+
             const titleHtml = song.song_url
                 ? `<a class="title-link" href="${escapeHtml(song.song_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(song.title)}</a>`
                 : `<span class="title-link">${escapeHtml(song.title)}</span>`;
-            const handleHtml = song.handle ? `<div class="subtle">${escapeHtml(song.handle)}</div>` : "";
+
+            const handleHtml = song.handle
+                ? `<div class="subtle">${escapeHtml(song.handle)}</div>`
+                : "";
 
             return `
                 <tr data-song-id="${escapeHtml(song.id)}">
-                    <td>
-                        <div class="rank-wrap">
-                            <button class="select-btn" id="select-${escapeHtml(song.id)}" onclick="togglePlaylistSelection('${jsString(song.id)}', event)" title="플레이리스트 선택/해제">✓</button>
-                            <span class="rank">${song.rank}</span>
-                        </div>
-                    </td>
+                    <td class="rank">${song.rank}</td>
                     <td>
                         <div class="cover-cell">
-                            <button class="cover-btn" id="cover-${escapeHtml(song.id)}" onclick="handleCoverClick('${jsString(song.id)}')" title="재생 / 일시정지">
+                            <button class="cover-btn" onclick="addAndPlay('${escapeHtml(song.id)}')" title="추가 후 재생">
                                 ${imageHtml}
                             </button>
+                            <button class="add-btn" id="add-${escapeHtml(song.id)}" onclick="addToPlaylist('${escapeHtml(song.id)}')" title="플레이리스트 추가">+</button>
                         </div>
                     </td>
-                    <td class="title-cell">${titleHtml}<div class="subtle">${escapeHtml(song.created_at)}</div></td>
-                    <td class="creator">${escapeHtml(song.creator)}${handleHtml}</td>
+                    <td class="title-cell">
+                        ${titleHtml}
+                        <div class="subtle">${escapeHtml(song.created_at)}</div>
+                    </td>
+                    <td class="creator">
+                        ${escapeHtml(song.creator)}
+                        ${handleHtml}
+                    </td>
                     <td class="num">${formatInt(song.play_count)}</td>
                     <td class="num">${formatInt(song.upvote_count)}</td>
                     <td class="num">${formatInt(song.comment_count)}</td>
-                    <td style="text-align:center;"><button class="info-btn" onclick="showRankingInfo('${jsString(song.id)}')">랭킹정보</button></td>
-                </tr>`;
+                </tr>
+            `;
         }).join("");
 
-        refreshSongStates();
+        refreshAddButtons();
     }
 
-    function getSongById(id) { return songs.find(s => String(s.id) === String(id)); }
+    function getSongById(id) {
+        return songs.find(s => String(s.id) === String(id));
+    }
 
     function addToPlaylist(id) {
         const song = getSongById(id);
-        if (!song) return false;
-        if (!song.audio_url) { alert("이 곡에는 audio_url이 없습니다."); return false; }
-        if (!playlist.some(s => String(s.id) === String(song.id))) playlist.push(song);
+
+        if (!song) return;
+
+        if (!song.audio_url) {
+            alert("이 곡에는 audio_url이 없습니다.");
+            return;
+        }
+
+        if (!playlist.some(s => String(s.id) === String(song.id))) {
+            playlist.push(song);
+        }
+
         if (currentIndex === -1) {
             currentIndex = playlist.findIndex(s => String(s.id) === String(song.id));
             loadCurrent(false);
         }
+
         renderPlaylist();
-        refreshSongStates();
-        return true;
+        refreshAddButtons();
     }
 
-    function togglePlaylistSelection(id, event) {
-        if (event) event.stopPropagation();
-        const idx = playlist.findIndex(s => String(s.id) === String(id));
-        if (idx >= 0) removeFromPlaylist(id, event);
-        else addToPlaylist(id);
-    }
+    function addAndPlay(id) {
+        addToPlaylist(id);
 
-    function handleCoverClick(id) {
-        const song = getSongById(id);
-        if (!song) return;
         const idx = playlist.findIndex(s => String(s.id) === String(id));
 
-        if (idx < 0) {
-            if (addToPlaylist(id)) {
-                currentIndex = playlist.findIndex(s => String(s.id) === String(id));
-                loadCurrent(true);
-            }
-            return;
+        if (idx >= 0) {
+            currentIndex = idx;
+            loadCurrent(true);
         }
-
-        if (currentIndex === idx) {
-            togglePlay();
-            return;
-        }
-
-        currentIndex = idx;
-        loadCurrent(true);
     }
 
-    window.togglePlaylistSelection = togglePlaylistSelection;
-    window.handleCoverClick = handleCoverClick;
+    window.addToPlaylist = addToPlaylist;
+    window.addAndPlay = addAndPlay;
 
     function removeFromPlaylist(id, event) {
         if (event) event.stopPropagation();
+
         const idx = playlist.findIndex(s => String(s.id) === String(id));
+
         if (idx < 0) return;
+
         const wasCurrent = idx === currentIndex;
+
         playlist.splice(idx, 1);
 
         if (playlist.length === 0) {
@@ -1025,84 +1276,99 @@ def render_player_ranking(df, hist=None):
             audio.removeAttribute("src");
             updateNowPlaying(null);
         } else {
-            if (idx < currentIndex) currentIndex -= 1;
-            else if (wasCurrent) {
+            if (idx < currentIndex) {
+                currentIndex -= 1;
+            } else if (wasCurrent) {
                 currentIndex = Math.min(idx, playlist.length - 1);
                 loadCurrent(false);
             }
         }
 
         renderPlaylist();
-        refreshSongStates();
+        refreshAddButtons();
     }
+
     window.removeFromPlaylist = removeFromPlaylist;
 
     function renderPlaylist() {
         playlistCount.textContent = `${playlist.length} tracks`;
+
         if (playlist.length === 0) {
-            playlistEl.innerHTML = `<div class="playlist-empty">아직 플레이리스트가 비어 있습니다.<br>오른쪽 랭킹에서 앨범 이미지나 체크 버튼을 눌러 추가하세요.</div>`;
+            playlistEl.innerHTML = `
+                <div class="playlist-empty">
+                    아직 플레이리스트가 비어 있습니다.<br>
+                    오른쪽 랭킹에서 앨범 이미지나 + 버튼을 눌러 추가하세요.
+                </div>
+            `;
             return;
         }
 
         playlistEl.innerHTML = playlist.map((song, idx) => {
             const active = idx === currentIndex ? "active" : "";
-            const thumb = song.image_url ? `<img class="playlist-thumb" src="${escapeHtml(song.image_url)}" loading="lazy">` : `<div class="playlist-thumb"></div>`;
-            return `<div class="playlist-item ${active}" onclick="playPlaylistIndex(${idx})">
-                ${thumb}
-                <div class="playlist-meta"><div class="playlist-song-title">${escapeHtml(song.title)}</div><div class="playlist-song-sub">${escapeHtml(song.creator)} ${escapeHtml(song.handle || "")}</div></div>
-                <button class="remove-btn" onclick="removeFromPlaylist('${jsString(song.id)}', event)">×</button>
-            </div>`;
+            const thumb = song.image_url
+                ? `<img class="playlist-thumb" src="${escapeHtml(song.image_url)}" loading="lazy">`
+                : `<div class="playlist-thumb"></div>`;
+
+            return `
+                <div class="playlist-item ${active}" onclick="playPlaylistIndex(${idx})">
+                    ${thumb}
+                    <div class="playlist-meta">
+                        <div class="playlist-song-title">${escapeHtml(song.title)}</div>
+                        <div class="playlist-song-sub">${escapeHtml(song.creator)} ${escapeHtml(song.handle || "")}</div>
+                    </div>
+                    <button class="remove-btn" onclick="removeFromPlaylist('${escapeHtml(song.id)}', event)">×</button>
+                </div>
+            `;
         }).join("");
     }
 
-    function refreshSongStates() {
+    function refreshAddButtons() {
         songs.forEach(song => {
-            const selectBtn = document.getElementById(`select-${song.id}`);
-            const coverBtn = document.getElementById(`cover-${song.id}`);
+            const btn = document.getElementById(`add-${song.id}`);
+
+            if (!btn) return;
+
             const added = playlist.some(s => String(s.id) === String(song.id));
 
-            if (selectBtn) {
-                selectBtn.classList.toggle("added", added);
-                selectBtn.textContent = added ? "✓" : "";
-            }
-
-            if (coverBtn) {
-                coverBtn.classList.toggle("playing", isPlayingSong(song));
-                coverBtn.classList.toggle("paused", isCurrentSong(song) && audio.paused);
+            if (added) {
+                btn.classList.add("added");
+                btn.textContent = "✓";
+            } else {
+                btn.classList.remove("added");
+                btn.textContent = "+";
             }
         });
-
-        nowCoverWrap.classList.toggle("playing", !audio.paused && currentIndex >= 0);
     }
 
     function playPlaylistIndex(idx) {
         if (idx < 0 || idx >= playlist.length) return;
-        if (currentIndex === idx) togglePlay();
-        else {
-            currentIndex = idx;
-            loadCurrent(true);
-        }
+
+        currentIndex = idx;
+        loadCurrent(true);
     }
+
     window.playPlaylistIndex = playPlaylistIndex;
 
     function updateNowPlaying(song) {
-        nowCoverWrap.classList.remove("has-track", "playing");
         if (!song) {
             nowCoverWrap.innerHTML = `<div class="now-placeholder">No track selected</div>`;
             nowTitle.textContent = "플레이리스트에 곡을 추가하세요";
-            nowCreator.textContent = "앨범 이미지나 체크 버튼을 누르면 추가됩니다.";
+            nowCreator.textContent = "앨범 이미지나 + 버튼을 누르면 추가됩니다.";
             lyricsPanel.textContent = "가사/프롬프트 정보가 있으면 여기에 표시됩니다.";
             lyricsPanel.classList.add("empty");
             playBtn.textContent = "▶";
             progress.value = 0;
             currentTimeEl.textContent = "0:00";
             durationEl.textContent = "0:00";
-            refreshSongStates();
             return;
         }
 
-        nowCoverWrap.classList.add("has-track");
-        nowCoverWrap.innerHTML = song.image_url ? `<img class="now-cover" src="${escapeHtml(song.image_url)}">` : `<div class="now-placeholder">No image</div>`;
+        if (song.image_url) {
+            nowCoverWrap.innerHTML = `<img class="now-cover" src="${escapeHtml(song.image_url)}">`;
+        } else {
+            nowCoverWrap.innerHTML = `<div class="now-placeholder">No image</div>`;
+        }
+
         nowTitle.textContent = song.title;
         nowCreator.textContent = `${song.creator || ""} ${song.handle || ""}`.trim();
 
@@ -1113,96 +1379,123 @@ def render_player_ranking(df, hist=None):
             lyricsPanel.textContent = "가사/프롬프트 정보가 아직 수집되지 않았습니다.";
             lyricsPanel.classList.add("empty");
         }
-        refreshSongStates();
     }
 
     function loadCurrent(autoplay) {
-        if (currentIndex < 0 || currentIndex >= playlist.length) { updateNowPlaying(null); return; }
+        if (currentIndex < 0 || currentIndex >= playlist.length) {
+            updateNowPlaying(null);
+            return;
+        }
+
         const song = playlist[currentIndex];
+
         updateNowPlaying(song);
         renderPlaylist();
 
-        if (!song.audio_url) { alert("이 곡에는 audio_url이 없습니다."); return; }
+        if (!song.audio_url) {
+            alert("이 곡에는 audio_url이 없습니다.");
+            return;
+        }
+
         audio.pause();
         audio.src = song.audio_url;
         audio.load();
         updateVolume();
 
         if (autoplay) {
-            audio.play().then(() => { playBtn.textContent = "Ⅱ"; refreshSongStates(); })
-                .catch(err => { console.log(err); playBtn.textContent = "▶"; refreshSongStates(); alert("브라우저가 오디오 재생을 막았거나 URL을 재생할 수 없습니다."); });
+            audio.play()
+                .then(() => {
+                    playBtn.textContent = "Ⅱ";
+                })
+                .catch(err => {
+                    console.log(err);
+                    playBtn.textContent = "▶";
+                    alert("브라우저가 오디오 재생을 막았거나 URL을 재생할 수 없습니다.");
+                });
         } else {
             playBtn.textContent = "▶";
-            refreshSongStates();
         }
     }
 
     function togglePlay() {
         if (currentIndex === -1) {
-            if (playlist.length > 0) { currentIndex = 0; loadCurrent(true); }
+            if (playlist.length > 0) {
+                currentIndex = 0;
+                loadCurrent(true);
+            }
+
             return;
         }
+
         if (audio.paused) {
-            audio.play().then(() => { playBtn.textContent = "Ⅱ"; refreshSongStates(); })
-                .catch(err => { console.log(err); alert("브라우저가 오디오 재생을 막았거나 URL을 재생할 수 없습니다."); });
+            audio.play()
+                .then(() => {
+                    playBtn.textContent = "Ⅱ";
+                })
+                .catch(err => {
+                    console.log(err);
+                    alert("브라우저가 오디오 재생을 막았거나 URL을 재생할 수 없습니다.");
+                });
         } else {
             audio.pause();
             playBtn.textContent = "▶";
-            refreshSongStates();
         }
     }
-    window.togglePlay = togglePlay;
 
     function playNext() {
         if (playlist.length === 0) return;
-        if (currentIndex < playlist.length - 1) { currentIndex += 1; loadCurrent(true); }
-        else if (repeatAll) { currentIndex = 0; loadCurrent(true); }
-        else { audio.pause(); playBtn.textContent = "▶"; refreshSongStates(); }
+
+        if (currentIndex < playlist.length - 1) {
+            currentIndex += 1;
+            loadCurrent(true);
+        } else if (repeatAll) {
+            currentIndex = 0;
+            loadCurrent(true);
+        } else {
+            audio.pause();
+            playBtn.textContent = "▶";
+        }
     }
 
     function playPrev() {
         if (playlist.length === 0) return;
-        if (audio.currentTime > 3) { audio.currentTime = 0; return; }
-        if (currentIndex > 0) { currentIndex -= 1; loadCurrent(true); }
-        else if (repeatAll) { currentIndex = playlist.length - 1; loadCurrent(true); }
-    }
 
-    function shufflePlaylist() {
-        if (playlist.length <= 1) return;
-        const currentSong = playlist[currentIndex];
-        for (let i = playlist.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [playlist[i], playlist[j]] = [playlist[j], playlist[i]];
+        if (audio.currentTime > 3) {
+            audio.currentTime = 0;
+            return;
         }
-        currentIndex = currentSong ? playlist.findIndex(s => String(s.id) === String(currentSong.id)) : -1;
-        renderPlaylist();
-        refreshSongStates();
-    }
 
-    function orderPlaylistByRank() {
-        const currentSong = playlist[currentIndex];
-        playlist.sort((a, b) => Number(a.rank || 9999) - Number(b.rank || 9999));
-        currentIndex = currentSong ? playlist.findIndex(s => String(s.id) === String(currentSong.id)) : -1;
-        renderPlaylist();
-        refreshSongStates();
+        if (currentIndex > 0) {
+            currentIndex -= 1;
+            loadCurrent(true);
+        } else if (repeatAll) {
+            currentIndex = playlist.length - 1;
+            loadCurrent(true);
+        }
     }
 
     playBtn.addEventListener("click", togglePlay);
     nextBtn.addEventListener("click", playNext);
     prevBtn.addEventListener("click", playPrev);
-    orderedBtn.addEventListener("click", orderPlaylistByRank);
-    shuffleBtn.addEventListener("click", shufflePlaylist);
 
     repeatOneBtn.addEventListener("click", () => {
         repeatOne = !repeatOne;
-        if (repeatOne) repeatAll = false;
+
+        if (repeatOne) {
+            repeatAll = false;
+        }
+
         repeatOneBtn.classList.toggle("active", repeatOne);
         repeatAllBtn.classList.toggle("active", repeatAll);
     });
 
     repeatAllBtn.addEventListener("click", () => {
         repeatAll = !repeatAll;
-        if (repeatAll) repeatOne = false;
+
+        if (repeatAll) {
+            repeatOne = false;
+        }
+
         repeatOneBtn.classList.toggle("active", repeatOne);
         repeatAllBtn.classList.toggle("active", repeatAll);
     });
@@ -1214,17 +1507,24 @@ def render_player_ranking(df, hist=None):
         audio.removeAttribute("src");
         updateNowPlaying(null);
         renderPlaylist();
-        refreshSongStates();
+        refreshAddButtons();
     });
 
-    removeCurrentBtn.addEventListener("click", () => {
+    openBtn.addEventListener("click", () => {
         if (currentIndex < 0 || currentIndex >= playlist.length) return;
-        removeFromPlaylist(playlist[currentIndex].id);
+
+        const song = playlist[currentIndex];
+
+        if (song.song_url) {
+            window.open(song.song_url, "_blank", "noopener,noreferrer");
+        }
     });
 
     volume.addEventListener("input", updateVolume);
+
     progress.addEventListener("input", () => {
         if (!isFinite(audio.duration) || audio.duration <= 0) return;
+
         audio.currentTime = (Number(progress.value) / 1000) * audio.duration;
     });
 
@@ -1235,74 +1535,31 @@ def render_player_ranking(df, hist=None):
             durationEl.textContent = formatTime(audio.duration);
         }
     });
-    audio.addEventListener("loadedmetadata", () => { durationEl.textContent = formatTime(audio.duration); });
-    audio.addEventListener("play", () => { playBtn.textContent = "Ⅱ"; refreshSongStates(); renderPlaylist(); });
-    audio.addEventListener("pause", () => { playBtn.textContent = "▶"; refreshSongStates(); renderPlaylist(); });
-    audio.addEventListener("ended", () => { if (repeatOne) { audio.currentTime = 0; audio.play(); } else playNext(); });
-    searchInput.addEventListener("input", () => { renderTable(searchInput.value); });
 
-    function buildHistoryChart(points) {
-        if (!points || points.length < 2) return `<div class="subtle">히스토리 데이터가 2개 미만이라 그래프를 표시할 수 없습니다.</div>`;
-        const w = 780, h = 260, pad = 34;
-        const maxY = Math.max(1, ...points.flatMap(p => [Number(p.play_count || 0), Number(p.upvote_count || 0), Number(p.comment_count || 0)]));
-        const x = i => pad + (i / Math.max(1, points.length - 1)) * (w - pad * 2);
-        const y = v => h - pad - (Number(v || 0) / maxY) * (h - pad * 2);
-        const pathFor = key => points.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`).join(" ");
-        const last = points[points.length - 1];
-        const first = points[0];
-        return `
-            <svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="history chart">
-                <line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="#e5e7eb" />
-                <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}" stroke="#e5e7eb" />
-                <text x="${pad}" y="18" font-size="11" fill="#6b7280">Max ${formatInt(maxY)}</text>
-                <text x="${pad}" y="${h-8}" font-size="11" fill="#6b7280">${escapeHtml(first.checked_at)}</text>
-                <text x="${w-pad}" y="${h-8}" font-size="11" fill="#6b7280" text-anchor="end">${escapeHtml(last.checked_at)}</text>
-                <path d="${pathFor("play_count")}" fill="none" stroke="#111827" stroke-width="2.4" />
-                <path d="${pathFor("upvote_count")}" fill="none" stroke="#6b7280" stroke-width="2" />
-                <path d="${pathFor("comment_count")}" fill="none" stroke="#9ca3af" stroke-width="2" />
-            </svg>
-            <div class="chart-legend">
-                <span><span class="legend-dot"></span>Play</span>
-                <span><span class="legend-dot likes"></span>Like</span>
-                <span><span class="legend-dot comments"></span>Comment</span>
-            </div>`;
-    }
+    audio.addEventListener("loadedmetadata", () => {
+        durationEl.textContent = formatTime(audio.duration);
+    });
 
-    function showRankingInfo(id) {
-        const song = getSongById(id);
-        if (!song) return;
-        const c = song.ranking_config || {};
-        modalTitle.textContent = `#${song.rank} ${song.title}`;
-        modalSub.textContent = `${song.creator || ""} ${song.handle || ""}`.trim();
-        modalBody.innerHTML = `
-            <div class="score-grid">
-                <div class="score-card"><div class="score-label">Trend score</div><div class="score-value">${formatNum(song.trend_score, 2)}</div></div>
-                <div class="score-card"><div class="score-label">Base</div><div class="score-value">${formatNum(song.base_score, 2)}</div></div>
-                <div class="score-card"><div class="score-label">Growth</div><div class="score-value">${formatNum(song.growth_score, 2)}</div></div>
-                <div class="score-card"><div class="score-label">Freshness</div><div class="score-value">${formatNum(song.freshness_score, 2)}</div></div>
-            </div>
-            <div class="formula-box">
-                <b>Formula</b><br>
-                trend_score = base_score + growth_score + freshness_score<br><br>
-                base_score = ${c.play_weight}×log1p(play_count) + ${c.like_weight}×log1p(upvote_count) + ${c.comment_weight}×log1p(comment_count)<br>
-                growth_score = (${c.growth_weight}) × [1.2×log1p(play_delta_${c.growth_window_hours}h) + 5.0×log1p(upvote_delta_${c.growth_window_hours}h) + 8.0×log1p(comment_delta_${c.growth_window_hours}h)]<br>
-                freshness_score = (${c.freshness_weight}) × freshness^${c.freshness_power}<br><br>
-                현재 값: play ${formatInt(song.play_count)}, like ${formatInt(song.upvote_count)}, comment ${formatInt(song.comment_count)}, ${c.growth_window_hours}h delta = play ${formatNum(song.play_delta_window, 0)} / like ${formatNum(song.upvote_delta_window, 0)} / comment ${formatNum(song.comment_delta_window, 0)}, age ${formatNum(song.age_hours, 2)}h
-            </div>
-            <div class="chart-box">
-                <b>History graph</b>
-                ${buildHistoryChart(song.history)}
-            </div>`;
-        rankingModal.classList.add("open");
-    }
-    window.showRankingInfo = showRankingInfo;
+    audio.addEventListener("play", () => {
+        playBtn.textContent = "Ⅱ";
+    });
 
-    function closeRankingInfo(event) {
-        if (event && event.target !== rankingModal) return;
-        rankingModal.classList.remove("open");
-    }
-    window.closeRankingInfo = closeRankingInfo;
-    document.addEventListener("keydown", event => { if (event.key === "Escape") closeRankingInfo(); });
+    audio.addEventListener("pause", () => {
+        playBtn.textContent = "▶";
+    });
+
+    audio.addEventListener("ended", () => {
+        if (repeatOne) {
+            audio.currentTime = 0;
+            audio.play();
+        } else {
+            playNext();
+        }
+    });
+
+    searchInput.addEventListener("input", () => {
+        renderTable(searchInput.value);
+    });
 
     renderTable("");
     renderPlaylist();
@@ -1312,7 +1569,11 @@ def render_player_ranking(df, hist=None):
 
     full_html = html_template.replace("__SONGS_JSON__", songs_json)
 
-    components.html(full_html, height=1540, scrolling=True)
+    components.html(
+        full_html,
+        height=1500,
+        scrolling=True,
+    )
 
 
 # ================================
@@ -1354,14 +1615,16 @@ view = view.reset_index(drop=True)
 view.insert(0, "rank", range(1, len(view) + 1))
 
 total_songs = len(db)
+visible_songs = len(view)
 last_checked = db["last_checked_at"].max() if "last_checked_at" in db.columns else pd.NaT
 newest_created = db["created_at"].max() if "created_at" in db.columns else pd.NaT
 
-m1, m2, m3 = st.columns(3)
+m1, m2, m3, m4 = st.columns(4)
 m1.metric("DB 곡 수", f"{total_songs:,}")
-m2.metric("최신 생성곡", newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-")
-m3.metric("마지막 업데이트", last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-")
+m2.metric("표시 곡 수", f"{visible_songs:,}")
+m3.metric("최신 생성곡", newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-")
+m4.metric("마지막 업데이트", last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-")
 
 st.divider()
 
-render_player_ranking(view, hist)
+render_player_ranking(view)
