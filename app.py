@@ -2684,30 +2684,54 @@ total_songs = len(db)
 last_checked = db["last_checked_at"].max() if "last_checked_at" in db.columns else pd.NaT
 newest_created = db["created_at"].max() if "created_at" in db.columns else pd.NaT
 
-m1, m2, m3 = st.columns(3)
-m1.metric("DB 곡 수", f"{total_songs:,}")
-m2.metric("최신 생성곡", newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-")
-m3.metric("마지막 업데이트", last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-")
+left_top, right_top = st.columns([1.05, 1.35], gap="large")
+
+with left_top:
+    st.markdown("### 데이터 정보")
+
+    info1, info2, info3 = st.columns(3)
+
+    info1.metric("DB 곡 수", f"{total_songs:,}")
+    info2.metric(
+        "최신 생성곡",
+        newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-"
+    )
+    info3.metric(
+        "마지막 업데이트",
+        last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
+    )
+
+with right_top:
+    st.markdown("### 수동 곡 추가")
+
+    with st.form("manual_add_song_form", clear_on_submit=False):
+        manual_suno_url = st.text_input(
+            "Suno song link",
+            placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
+            label_visibility="visible",
+        )
+
+        submit_col1, submit_col2 = st.columns([0.28, 0.72])
+
+        with submit_col1:
+            submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
+
+        with submit_col2:
+            st.caption("지원 링크: /song/... 또는 /s/...")
+
+    if submitted:
+        ok, msg = is_valid_suno_link(manual_suno_url)
+
+        if not ok:
+            st.warning(msg)
+        else:
+            ok, msg = trigger_manual_add_workflow(manual_suno_url)
+
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
 st.divider()
-st.subheader("수동 곡 추가")
-
-manual_suno_url = st.text_input(
-    "Suno song link",
-    placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
-)
-
-if st.button("곡 정보 수집 요청"):
-    ok, msg = is_valid_suno_link(manual_suno_url)
-
-    if not ok:
-        st.warning(msg)
-    else:
-        ok, msg = trigger_manual_add_workflow(manual_suno_url)
-
-        if ok:
-            st.success(msg)
-        else:
-            st.error(msg)
 
 render_player_ranking(view, hist)
