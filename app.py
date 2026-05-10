@@ -164,15 +164,6 @@ def safe_url(value):
     return s
 
 
-def fmt_int(value):
-    try:
-        if pd.isna(value):
-            return "0"
-        return f"{int(float(value)):,}"
-    except Exception:
-        return "0"
-
-
 def normalize_handle(value):
     handle = safe_text(value)
 
@@ -468,8 +459,6 @@ def build_song_payload(df):
 
         lyrics_candidates = []
 
-        # display_tags는 장르/스타일 태그라서 가사 표시 후보에서는 제외
-        # 실제 가사/프롬프트 후보만 표시
         for col in ["lyrics", "prompt", "gpt_description_prompt"]:
             if col in r.index:
                 raw = r.get(col, "")
@@ -500,7 +489,6 @@ def build_song_payload(df):
             "image_url": safe_url(r.get("image_url", "")),
             "lyrics": lyrics_text,
 
-            # 상세정보용
             "trend_score": float(r.get("trend_score", 0) or 0),
             "base_score": float(r.get("base_score", 0) or 0),
             "growth_score": float(r.get("growth_score", 0) or 0),
@@ -596,9 +584,7 @@ def render_player_ranking(df, hist):
         --soft: #f3f4f6;
     }
 
-    * {
-        box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
     html, body {
         margin: 0;
@@ -606,16 +592,8 @@ def render_player_ranking(df, hist):
         background: var(--bg);
         color: var(--text);
         font-family:
-            "Noto Sans KR",
-            "Noto Sans",
-            "Apple SD Gothic Neo",
-            "Malgun Gothic",
-            "Segoe UI",
-            "Segoe UI Symbol",
-            "Apple Color Emoji",
-            "Noto Color Emoji",
-            Arial,
-            sans-serif;
+            "Noto Sans KR", "Noto Sans", "Apple SD Gothic Neo",
+            "Malgun Gothic", "Segoe UI", Arial, sans-serif;
     }
 
     .app-shell {
@@ -675,13 +653,55 @@ def render_player_ranking(df, hist):
     .now-creator {
         font-size: 13px;
         color: var(--muted);
-        margin-bottom: 10px;
+        margin-bottom: 7px;
         word-break: break-word;
     }
 
-    .progress-wrap {
-        margin: 10px 0 8px 0;
+    .now-style-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin: 0 0 10px 0;
+        min-height: 20px;
     }
+
+    .now-style-tag {
+        display: inline-block;
+        max-width: 125px;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        color: #374151;
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 11px;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .now-style-empty {
+        color: var(--muted);
+        font-size: 12px;
+    }
+
+    .lyrics-panel {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 10px;
+        height: 210px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #374151;
+    }
+
+    .lyrics-panel.empty { color: var(--muted); }
+
+    .progress-wrap { margin: 10px 0 8px 0; }
 
     .time-row {
         display: flex;
@@ -725,43 +745,13 @@ def render_player_ranking(df, hist):
         font-size: 16px;
     }
 
-    .ctrl-btn:hover {
-        border-color: var(--accent);
-    }
+    .ctrl-btn:hover { border-color: var(--accent); }
 
     .mode-actions {
         display: grid;
         grid-template-columns: repeat(5, 1fr);
         gap: 6px;
         margin-bottom: 12px;
-    }
-
-    .now-style-tags {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-        margin: 0 0 10px 0;
-        min-height: 20px;
-    }
-
-    .now-style-tag {
-        display: inline-block;
-        max-width: 125px;
-        border: 1px solid var(--line);
-        background: #ffffff;
-        color: #374151;
-        border-radius: 999px;
-        padding: 3px 8px;
-        font-size: 11px;
-        line-height: 1.2;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .now-style-empty {
-        color: var(--muted);
-        font-size: 12px;
     }
 
     .small-btn {
@@ -828,19 +818,14 @@ def render_player_ranking(df, hist):
         display: grid;
         grid-template-columns: 34px 1fr 28px;
         gap: 8px;
-        align-items: start;
+        align-items: center;
         padding: 8px;
         border-bottom: 1px solid var(--line);
         cursor: pointer;
     }
 
-    .playlist-item:last-child {
-        border-bottom: 0;
-    }
-
-    .playlist-item.active {
-        background: #fee2e2;
-    }
+    .playlist-item:last-child { border-bottom: 0; }
+    .playlist-item.active { background: #fee2e2; }
 
     .playlist-thumb {
         width: 34px;
@@ -880,24 +865,6 @@ def render_player_ranking(df, hist):
         line-height: 1;
     }
 
-    .lyrics-panel {
-        margin-top: 10px;
-        border: 1px solid var(--line);
-        background: #ffffff;
-        border-radius: 12px;
-        padding: 10px;
-        height: 210px;
-        overflow-y: auto;
-        white-space: pre-wrap;
-        font-size: 12px;
-        line-height: 1.45;
-        color: #374151;
-    }
-
-    .lyrics-panel.empty {
-        color: var(--muted);
-    }
-
     .ranking-panel {
         min-width: 0;
         border: 1px solid var(--line);
@@ -935,9 +902,7 @@ def render_player_ranking(df, hist):
         outline: none;
     }
 
-    .search-input:focus {
-        border-color: var(--accent);
-    }
+    .search-input:focus { border-color: var(--accent); }
 
     .table-wrap {
         width: 100%;
@@ -973,13 +938,9 @@ def render_player_ranking(df, hist):
         color: var(--text);
     }
 
-    .song-table tr:hover {
-        background: #f9fafb;
-    }
+    .song-table tr:hover { background: #f9fafb; }
 
-    .select-cell {
-        text-align: center;
-    }
+    .select-cell { text-align: center; }
 
     .rank {
         font-weight: 850;
@@ -1161,9 +1122,7 @@ def render_player_ranking(df, hist):
         overflow-y: auto;
     }
 
-    .modal-backdrop.open {
-        display: block;
-    }
+    .modal-backdrop.open { display: block; }
 
     .modal-card {
         background: white;
@@ -1252,14 +1211,10 @@ def render_player_ranking(df, hist):
         text-decoration: none;
     }
 
-    .footer-credit a:hover {
-        text-decoration: underline;
-    }
+    .footer-credit a:hover { text-decoration: underline; }
 
     @media (max-width: 980px) {
-        .app-shell {
-            grid-template-columns: 1fr;
-        }
+        .app-shell { grid-template-columns: 1fr; }
 
         .player-panel {
             position: relative;
@@ -1267,17 +1222,9 @@ def render_player_ranking(df, hist):
             max-height: none;
         }
 
-        .playlist {
-            height: 220px;
-        }
-
-        .lyrics-panel {
-            height: 180px;
-        }
-
-        .score-grid {
-            grid-template-columns: repeat(2, 1fr);
-        }
+        .playlist { height: 220px; }
+        .lyrics-panel { height: 180px; }
+        .score-grid { grid-template-columns: repeat(2, 1fr); }
     }
     </style>
 
@@ -1419,7 +1366,7 @@ def render_player_ranking(df, hist):
     let repeatOne = false;
     let repeatAll = true;
     let playbackMode = "sequence";
-    
+
     const nowCoverWrap = document.getElementById("nowCoverWrap");
     const nowTitle = document.getElementById("nowTitle");
     const nowCreator = document.getElementById("nowCreator");
@@ -1549,22 +1496,6 @@ def render_player_ranking(df, hist):
         return tags.slice(0, 8).map(tag => {
             return `<span class="now-style-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`;
         }).join("");
-    }
-
-        const id = String(song.id);
-        const expanded = expandedPlaylistStyleIds.has(id);
-        const visibleTags = expanded ? tags : tags.slice(0, 2);
-        const modeClass = expanded ? "expanded" : "collapsed";
-        const toggleText = expanded ? "접기" : `스타일${tags.length > 2 ? " +" + (tags.length - 2) : ""}`;
-
-        return `
-            <div class="playlist-style-row">
-                <button class="playlist-style-toggle" data-action="toggle-playlist-style" data-song-id="${escapeHtml(id)}">${toggleText}</button>
-                <div class="playlist-style-tags ${modeClass}">
-                    ${visibleTags.map(tag => `<span class="playlist-style-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join("")}
-                </div>
-            </div>
-        `;
     }
 
     function getCurrentSong() {
@@ -1706,7 +1637,6 @@ def render_player_ranking(df, hist):
                 removeFromPlaylistById(btn.dataset.songId);
             });
         });
-
     }
 
     function addToPlaylist(id) {
@@ -1742,7 +1672,7 @@ def render_player_ranking(df, hist):
         const wasCurrent = idx === currentIndex;
 
         playlist.splice(idx, 1);
-        
+
         if (playlist.length === 0) {
             currentIndex = -1;
             audio.pause();
