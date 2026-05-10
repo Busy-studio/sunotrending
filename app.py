@@ -1973,6 +1973,111 @@ def render_player_ranking(df, hist):
         return `${m}:${String(s).padStart(2, "0")}`;        
     }
 
+function getSortableValue(song, key) {
+    if (key === "rank") {
+        return Number(song.rank || 0);
+    }
+
+    if (key === "rank_change") {
+        if (song.rank_status === "new") return 999999;
+        if (song.rank_change === null || song.rank_change === undefined || song.rank_change === "") return 0;
+        return Number(song.rank_change || 0);
+    }
+
+    if (key === "has_image") {
+        return song.image_url ? 1 : 0;
+    }
+
+    if (key === "title") {
+        return String(song.title || "").toLowerCase();
+    }
+
+    if (key === "creator") {
+        return String(song.creator || "").toLowerCase();
+    }
+
+    if (key === "style_tags") {
+        return String(song.style_tags || "").toLowerCase();
+    }
+
+    if (key === "play_count") {
+        return Number(song.play_count || 0);
+    }
+
+    if (key === "upvote_count") {
+        return Number(song.upvote_count || 0);
+    }
+
+    if (key === "comment_count") {
+        return Number(song.comment_count || 0);
+    }
+
+    return "";
+}
+
+function sortSongsForView(list) {
+    if (!sortState.key || !sortState.direction) {
+        return list.slice().sort((a, b) => Number(a.rank || 0) - Number(b.rank || 0));
+    }
+
+    const key = sortState.key;
+    const direction = sortState.direction;
+
+    return list.slice().sort((a, b) => {
+        const av = getSortableValue(a, key);
+        const bv = getSortableValue(b, key);
+
+        let result = 0;
+
+        if (typeof av === "number" && typeof bv === "number") {
+            result = av - bv;
+        } else {
+            result = String(av).localeCompare(String(bv), "ko", {
+                numeric: true,
+                sensitivity: "base",
+            });
+        }
+
+        if (result === 0) {
+            result = Number(a.rank || 0) - Number(b.rank || 0);
+        }
+
+        return direction === "asc" ? result : -result;
+    });
+}
+
+function updateSortIndicators() {
+    document.querySelectorAll("th.sortable").forEach(th => {
+        const indicator = th.querySelector(".sort-indicator");
+        if (!indicator) return;
+
+        const key = th.dataset.sortKey;
+
+        if (sortState.key !== key || !sortState.direction) {
+            indicator.textContent = "";
+            return;
+        }
+
+        indicator.textContent = sortState.direction === "asc" ? "▲" : "▼";
+    });
+}
+
+function cycleSort(key) {
+    if (sortState.key !== key) {
+        sortState.key = key;
+        sortState.direction = "asc";
+    } else if (sortState.direction === "asc") {
+        sortState.direction = "desc";
+    } else if (sortState.direction === "desc") {
+        sortState.key = null;
+        sortState.direction = null;
+    } else {
+        sortState.direction = "asc";
+    }
+
+    renderTable(searchInput.value || "");
+}
+
     function renderRankChange(value, status) {
         if (status === "new") {
             return `<span class="rank-new">NEW</span>`;
@@ -2081,18 +2186,27 @@ def render_player_ranking(df, hist):
     function renderTable(filterText = "") {
         const q = filterText.trim().toLowerCase();
 
-        const filtered = songs.filter(song => {
+        let filtered = songs.filter(song => {
             if (!q) return true;
 
             const hay = [
                 song.title,
                 song.style_tags,
                 song.creator,
-                song.handle
+                song.handle,
+                song.id
             ].join(" ").toLowerCase();
 
             return hay.includes(q);
         });
+
+        filtered = sortSongsForView(filtered);
+
+        if (!q) {
+            filtered = filtered.slice(0, 200);
+        }
+
+        updateSortIndicators();
 
         if (!filtered.length) {
             songTableBody.innerHTML = `
@@ -2170,6 +2284,19 @@ def render_player_ranking(df, hist):
                 togglePlaylist(btn.dataset.songId);
             });
         });
+
+    function bindSortHeaderEvents() {
+        document.querySelectorAll("th.sortable").forEach(th => {
+            th.addEventListener("click", event => {
+                event.preventDefault();
+
+                const key = th.dataset.sortKey;
+                if (!key) return;
+
+                cycleSort(key);
+            });
+        });
+    }
 
         songTableBody.querySelectorAll("[data-action='cover-click']").forEach(btn => {
             btn.addEventListener("click", event => {
@@ -2729,6 +2856,7 @@ def render_player_ranking(df, hist):
         }
     });
 
+    bindSortHeaderEvents();
     renderTable("");
     renderPlaylist();
     refreshModeButtons();
