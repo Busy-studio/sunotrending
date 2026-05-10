@@ -3,7 +3,7 @@ name: Update Suno Song Stats
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "5,35 * * * *"
 
 concurrency:
   group: suno-data-update
