@@ -17,8 +17,8 @@ name: Update Suno Song Stats
         type: string
 
   schedule:
-    # Full update every 10 minutes
-    - cron: "*/10 * * * *"
+    # Full update every 15 minutes
+    - cron: "*/15 * * * *"
 
 concurrency:
   group: suno-data-update
@@ -126,8 +126,8 @@ jobs:
       - name: Full update public song pages
         if: steps.mode.outputs.mode == 'full'
         env:
-          REQUEST_SLEEP_SECONDS: "0.45"
-          MAX_UPDATE_ROWS: "500"
+          REQUEST_SLEEP_SECONDS: "0.8"
+          MAX_UPDATE_ROWS: "300"
           NEW_SONGS_PAGES: "3"
           NEW_SONGS_PAGE_SIZE: "50"
           SONG_RETENTION_DAYS: "4"
@@ -139,7 +139,7 @@ jobs:
         env:
           MANUAL_SUNO_URL: ${{ github.event.inputs.song_url }}
           SONG_RETENTION_DAYS: "4"
-          REQUEST_SLEEP_SECONDS: "0.5"
+          REQUEST_SLEEP_SECONDS: "0.8"
         run: |
           python scripts/manual_add_song.py
 
@@ -147,7 +147,7 @@ jobs:
         env:
           MANUAL_QUEUE_MAX_ITEMS: "20"
           SONG_RETENTION_DAYS: "4"
-          REQUEST_SLEEP_SECONDS: "0.5"
+          REQUEST_SLEEP_SECONDS: "0.8"
         run: |
           if [ -f scripts/process_manual_queue.py ]; then
             python scripts/process_manual_queue.py
@@ -198,10 +198,10 @@ jobs:
 
       - name: Analyze comment quality
         env:
-          COMMENT_ANALYZE_TOP_N: "200"
-          COMMENT_MAX_PAGES: "3"
-          COMMENT_MAX_ITEMS_PER_SONG: "120"
-          COMMENT_REQUEST_SLEEP_SECONDS: "0.4"
+          COMMENT_ANALYZE_TOP_N: "100"
+          COMMENT_MAX_PAGES: "2"
+          COMMENT_MAX_ITEMS_PER_SONG: "80"
+          COMMENT_REQUEST_SLEEP_SECONDS: "0.8"
           SONG_RETENTION_DAYS: "4"
           GROWTH_WINDOW_HOURS: "3"
           PLAY_WEIGHT: "1.0"
@@ -257,6 +257,22 @@ jobs:
               "rank_status",
           ]:
               print(f"[quality after] has_{col}={col in db.columns}")
+
+          for col in [
+              "created_at",
+              "lyrics",
+              "prompt",
+              "gpt_description_prompt",
+              "display_tags",
+              "audio_url",
+              "image_url",
+          ]:
+              if col in db.columns:
+                  s = db[col].astype(str).str.strip()
+                  valid = (~s.str.lower().isin(["", "nan", "none", "null", "<na>", "-"])).sum()
+                  print(f"[detail after] {col}_valid={valid}/{len(db)}")
+              else:
+                  print(f"[detail after] missing_{col}=True")
 
           if os.path.exists(quality_path):
               q = pd.read_csv(quality_path)
