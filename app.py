@@ -102,7 +102,7 @@ def broken_score(s: str) -> int:
 
     bad_markers = [
         "Ã", "ã", "Â", "â", "ð", "Ð", "Ñ", "Î", "Ï",
-        "ç", "è", "é", "ê", "ë", "í", "ì", "Å", "�",
+        "ç", "è", "é", "ê", "ë", "í", "ì", "Å", " ",
     ]
 
     score = sum(s.count(ch) * 3 for ch in bad_markers)
@@ -2188,7 +2188,7 @@ function cycleSort(key) {
     }
 
         function renderTable(filterText = "") {
-        const q = filterText.trim().toLowerCase();
+        const q = String(filterText || "").trim().toLowerCase();
 
         let filtered = songs.filter(song => {
             if (!q) return true;
@@ -2280,7 +2280,7 @@ function cycleSort(key) {
         refreshButtonsAndCovers();
     }
 
-        function bindTableEvents() {
+    function bindTableEvents() {
         songTableBody.querySelectorAll("[data-action='toggle-playlist']").forEach(btn => {
             btn.addEventListener("click", event => {
                 event.preventDefault();
@@ -2315,23 +2315,6 @@ function cycleSort(key) {
                 if (!key) return;
 
                 cycleSort(key);
-            });
-        });
-    }
-
-        songTableBody.querySelectorAll("[data-action='cover-click']").forEach(btn => {
-            btn.addEventListener("click", event => {
-                event.preventDefault();
-                event.stopPropagation();
-                coverClick(btn.dataset.songId);
-            });
-        });
-
-        songTableBody.querySelectorAll("[data-action='rank-info']").forEach(btn => {
-            btn.addEventListener("click", event => {
-                event.preventDefault();
-                event.stopPropagation();
-                openRankingInfo(btn.dataset.songId);
             });
         });
     }
