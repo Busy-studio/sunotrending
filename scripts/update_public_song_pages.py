@@ -76,6 +76,88 @@ def ensure_data_files():
         ]).to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")
 
 
+def is_blank_value(value):
+    if value is None:
+        return True
+
+    try:
+        if pd.isna(value):
+            return True
+    except Exception:
+        pass
+
+    if isinstance(value, (dict,)):
+        return True
+
+    if isinstance(value, list):
+        return len(value) == 0
+
+    s = str(value).strip()
+
+    if not s:
+        return True
+
+    if s.lower() in ["nan", "none", "null", "undefined", "<na>", "-"]:
+        return True
+
+    # Next.js / RSC 참조 토큰 제거: $5b, $12, $abc 같은 값
+    if s.startswith("$") and len(s) <= 8:
+        return True
+
+    return False
+
+
+def clean_text_field(value):
+    if is_blank_value(value):
+        return None
+
+    if isinstance(value, (dict, list)):
+        return None
+
+    return str(value).strip()
+
+
+def first_non_empty(*values):
+    for value in values:
+        if is_blank_value(value):
+            continue
+        return value
+
+    return None
+
+
+def get_old_value(old_row, key, default=None):
+    if old_row is None:
+        return default
+
+    try:
+        value = old_row.get(key, default)
+    except Exception:
+        return default
+
+    return first_non_empty(value, default)
+
+
+def clean_list_or_text(value):
+    if is_blank_value(value):
+        return None
+
+    if isinstance(value, list):
+        cleaned = [str(x).strip() for x in value if not is_blank_value(x)]
+        return ", ".join(cleaned) if cleaned else None
+
+    return str(value).strip()
+
+
+def get_nested_dict(obj, key):
+    value = obj.get(key)
+
+    if isinstance(value, dict):
+        return value
+
+    return {}
+
+
 def is_contest(song):
     metadata = song.get("metadata") or {}
     if not isinstance(metadata, dict):
@@ -88,93 +170,257 @@ def is_contest(song):
         or song.get("download_disabled_reason") == "remix_contest"
     )
 
-def clean_text_field(value):
-    if value is None:
-        return None
-
-    if isinstance(value, (dict, list)):
-        return None
-
-    s = str(value).strip()
-
-    if not s:
-        return None
-
-    if s.lower() in ["nan", "none", "null", "undefined"]:
-        return None
-
-    # Next.js / RSC 참조 토큰 제거: $5b, $12, $abc 같은 값
-    if s.startswith("$") and len(s) <= 8:
-        return None
-
-    return s
-
 
 def flatten_song(song, old_row=None, source="public"):
     metadata = song.get("metadata") or {}
     if not isinstance(metadata, dict):
         metadata = {}
 
-    contest_ids = metadata.get("contest_ids")
-    song_id = song.get("id")
+    user = get_nested_dict(song, "user")
+    clip = get_nested_dict(song, "clip")
 
-    first_seen_at = None
-    old_source = source
+    song_id = first_non_empty(
+        song.get("id"),
+        clip.get("id"),
+        get_old_value(old_row, "id"),
+    )
 
-    if old_row is not None:
-        try:
-            first_seen_at = old_row.get("first_seen_at")
-            old_source = old_row.get("source") or source
-        except Exception:
-            pass
+    old_source = first_non_empty(
+        get_old_value(old_row, "source"),
+        source,
+    )
+
+    created_at = first_non_empty(
+        song.get("created_at"),
+        song.get("createdAt"),
+        song.get("created"),
+        clip.get("created_at"),
+        clip.get("createdAt"),
+        metadata.get("created_at"),
+        metadata.get("createdAt"),
+        get_old_value(old_row, "created_at"),
+    )
+
+    title = first_non_empty(
+        song.get("title"),
+        clip.get("title"),
+        metadata.get("title"),
+        get_old_value(old_row, "title"),
+        "Untitled",
+    )
+
+    handle = first_non_empty(
+        song.get("handle"),
+        user.get("handle"),
+        metadata.get("handle"),
+        get_old_value(old_row, "handle"),
+    )
+
+    display_name = first_non_empty(
+        song.get("display_name"),
+        song.get("displayName"),
+        user.get("display_name"),
+        user.get("displayName"),
+        metadata.get("display_name"),
+        metadata.get("displayName"),
+        get_old_value(old_row, "display_name"),
+    )
+
+    user_id = first_non_empty(
+        song.get("user_id"),
+        song.get("userId"),
+        user.get("id"),
+        metadata.get("user_id"),
+        get_old_value(old_row, "user_id"),
+    )
+
+    prompt = first_non_empty(
+        clean_text_field(song.get("prompt")),
+        clean_text_field(clip.get("prompt")),
+        clean_text_field(metadata.get("prompt")),
+        clean_text_field(song.get("lyric")),
+        clean_text_field(metadata.get("lyric")),
+        get_old_value(old_row, "prompt"),
+    )
+
+    lyrics = first_non_empty(
+        clean_text_field(song.get("lyrics")),
+        clean_text_field(clip.get("lyrics")),
+        clean_text_field(metadata.get("lyrics")),
+        clean_text_field(song.get("lyric")),
+        clean_text_field(clip.get("lyric")),
+        clean_text_field(metadata.get("lyric")),
+        prompt,
+        get_old_value(old_row, "lyrics"),
+    )
+
+    gpt_description_prompt = first_non_empty(
+        clean_text_field(song.get("gpt_description_prompt")),
+        clean_text_field(clip.get("gpt_description_prompt")),
+        clean_text_field(metadata.get("gpt_description_prompt")),
+        clean_text_field(song.get("gpt_description")),
+        clean_text_field(clip.get("gpt_description")),
+        clean_text_field(metadata.get("gpt_description")),
+        clean_text_field(song.get("description")),
+        clean_text_field(metadata.get("description")),
+        get_old_value(old_row, "gpt_description_prompt"),
+    )
+
+    display_tags = first_non_empty(
+        clean_list_or_text(song.get("display_tags")),
+        clean_list_or_text(clip.get("display_tags")),
+        clean_list_or_text(metadata.get("display_tags")),
+        clean_list_or_text(metadata.get("tags")),
+        clean_list_or_text(song.get("tags")),
+        get_old_value(old_row, "display_tags"),
+    )
+
+    contest_ids = first_non_empty(
+        clean_list_or_text(metadata.get("contest_ids")),
+        clean_list_or_text(song.get("contest_ids")),
+        get_old_value(old_row, "contest_ids"),
+    )
+
+    audio_url = first_non_empty(
+        song.get("audio_url"),
+        song.get("audioUrl"),
+        song.get("audio_url_mp3"),
+        song.get("stream_audio_url"),
+        song.get("streamAudioUrl"),
+        clip.get("audio_url"),
+        clip.get("audioUrl"),
+        metadata.get("audio_url"),
+        metadata.get("audioUrl"),
+        get_old_value(old_row, "audio_url"),
+    )
+
+    image_url = first_non_empty(
+        song.get("image_url"),
+        song.get("imageUrl"),
+        song.get("image_large_url"),
+        song.get("imageLargeUrl"),
+        clip.get("image_url"),
+        clip.get("imageUrl"),
+        metadata.get("image_url"),
+        metadata.get("imageUrl"),
+        metadata.get("image_large_url"),
+        get_old_value(old_row, "image_url"),
+    )
+
+    model = first_non_empty(
+        song.get("model_name"),
+        song.get("model"),
+        metadata.get("model_name"),
+        metadata.get("model"),
+        song.get("major_model_version"),
+        metadata.get("major_model_version"),
+        get_old_value(old_row, "model"),
+    )
+
+    major_model_version = first_non_empty(
+        song.get("major_model_version"),
+        metadata.get("major_model_version"),
+        get_old_value(old_row, "major_model_version"),
+    )
+
+    duration = first_non_empty(
+        song.get("duration"),
+        clip.get("duration"),
+        metadata.get("duration"),
+        get_old_value(old_row, "duration"),
+    )
+
+    now_txt = now_iso()
 
     return {
         "id": song_id,
-        "title": song.get("title"),
-        "handle": song.get("handle"),
-        "display_name": song.get("display_name"),
-        "user_id": song.get("user_id"),
-        "created_at": song.get("created_at"),
-        "first_seen_at": first_seen_at or now_iso(),
-        "last_checked_at": now_iso(),
+        "title": title,
+        "handle": handle,
+        "display_name": display_name,
+        "user_id": user_id,
 
-        "play_count": song.get("play_count"),
-        "upvote_count": song.get("upvote_count"),
-        "comment_count": song.get("comment_count"),
-        "flag_count": song.get("flag_count"),
-
-        "is_contest_clip": song.get("is_contest_clip"),
-        "contest_ids": ", ".join(contest_ids) if isinstance(contest_ids, list) else contest_ids,
-        "download_disabled_reason": song.get("download_disabled_reason"),
-
-        "is_public": song.get("is_public"),
-        "is_hidden": song.get("is_hidden"),
-        "is_trashed": song.get("is_trashed"),
-        "explicit": song.get("explicit"),
-
-        "model": song.get("model_name") or metadata.get("model_name") or song.get("major_model_version"),
-        "major_model_version": song.get("major_model_version"),
-        "display_tags": song.get("display_tags") or metadata.get("tags"),
-        "duration": metadata.get("duration"),
-
-        # 상세 페이지에서 가져올 수 있는 가사/프롬프트 후보
-        "lyrics": (
-            clean_text_field(song.get("lyrics"))
-            or clean_text_field(metadata.get("lyrics"))
-            or clean_text_field(metadata.get("lyric"))
+        "created_at": created_at,
+        "first_seen_at": first_non_empty(
+            get_old_value(old_row, "first_seen_at"),
+            now_txt,
         ),
-        "prompt": (
-            clean_text_field(song.get("prompt"))
-            or clean_text_field(metadata.get("prompt"))
+        "last_checked_at": now_txt,
+
+        "play_count": first_non_empty(
+            song.get("play_count"),
+            song.get("playCount"),
+            clip.get("play_count"),
+            get_old_value(old_row, "play_count"),
+            0,
         ),
-        "gpt_description_prompt": (
-            clean_text_field(song.get("gpt_description_prompt"))
-            or clean_text_field(metadata.get("gpt_description_prompt"))
+        "upvote_count": first_non_empty(
+            song.get("upvote_count"),
+            song.get("upvoteCount"),
+            song.get("like_count"),
+            song.get("likeCount"),
+            clip.get("upvote_count"),
+            get_old_value(old_row, "upvote_count"),
+            0,
+        ),
+        "comment_count": first_non_empty(
+            song.get("comment_count"),
+            song.get("commentCount"),
+            clip.get("comment_count"),
+            get_old_value(old_row, "comment_count"),
+            0,
+        ),
+        "flag_count": first_non_empty(
+            song.get("flag_count"),
+            song.get("flagCount"),
+            clip.get("flag_count"),
+            get_old_value(old_row, "flag_count"),
+            0,
         ),
 
-        "song_url": f"https://suno.com/song/{song_id}" if song_id else None,
-        "audio_url": song.get("audio_url"),
-        "image_url": song.get("image_url"),
+        "is_contest_clip": first_non_empty(
+            song.get("is_contest_clip"),
+            get_old_value(old_row, "is_contest_clip"),
+        ),
+        "contest_ids": contest_ids,
+        "download_disabled_reason": first_non_empty(
+            song.get("download_disabled_reason"),
+            get_old_value(old_row, "download_disabled_reason"),
+        ),
+
+        "is_public": first_non_empty(
+            song.get("is_public"),
+            get_old_value(old_row, "is_public"),
+        ),
+        "is_hidden": first_non_empty(
+            song.get("is_hidden"),
+            get_old_value(old_row, "is_hidden"),
+        ),
+        "is_trashed": first_non_empty(
+            song.get("is_trashed"),
+            get_old_value(old_row, "is_trashed"),
+        ),
+        "explicit": first_non_empty(
+            song.get("explicit"),
+            get_old_value(old_row, "explicit"),
+        ),
+
+        "model": model,
+        "major_model_version": major_model_version,
+        "display_tags": display_tags,
+        "duration": duration,
+
+        "lyrics": lyrics,
+        "prompt": prompt,
+        "gpt_description_prompt": gpt_description_prompt,
+
+        "song_url": first_non_empty(
+            song.get("song_url"),
+            song.get("songUrl"),
+            f"https://suno.com/song/{song_id}" if song_id else None,
+            get_old_value(old_row, "song_url"),
+        ),
+        "audio_url": audio_url,
+        "image_url": image_url,
         "source": old_source,
     }
 
@@ -253,6 +499,7 @@ def fetch_public_new_songs():
 
             for item in items:
                 song = extract_song_from_feed_item(item)
+
                 if song is None:
                     continue
 
@@ -314,6 +561,7 @@ def extract_balanced_json_object(text, start_index):
             depth += 1
         elif ch == "}":
             depth -= 1
+
             if depth == 0:
                 return text[start_index:i + 1]
 
@@ -323,10 +571,12 @@ def extract_balanced_json_object(text, start_index):
 def extract_clip_from_rsc_text(text):
     key = '"clip":'
     pos = text.find(key)
+
     if pos == -1:
         return None
 
     brace_start = text.find("{", pos + len(key))
+
     if brace_start == -1:
         return None
 
@@ -363,7 +613,7 @@ def fetch_song_public(song_id):
 
 
 def add_new_songs_to_db(db, songs):
-    if db.empty:
+    if db.empty or "id" not in db.columns:
         existing_ids = set()
     else:
         existing_ids = set(db["id"].dropna().astype(str))
@@ -374,7 +624,7 @@ def add_new_songs_to_db(db, songs):
     for song in songs:
         song_id = str(song.get("id"))
 
-        if not song_id or song_id == "None":
+        if not song_id or song_id == "None" or song_id == "nan":
             continue
 
         if song_id in existing_ids:
@@ -459,6 +709,27 @@ def prune_old_songs_and_history(final_db):
     return final_db
 
 
+def detail_field_report(db):
+    print("[detail_check] start")
+
+    for col in [
+        "created_at",
+        "lyrics",
+        "prompt",
+        "gpt_description_prompt",
+        "display_tags",
+        "audio_url",
+        "image_url",
+    ]:
+        if col not in db.columns:
+            print(f"[detail_check] missing {col}")
+            continue
+
+        s = db[col].astype(str).str.strip()
+        valid = (~s.str.lower().isin(["", "nan", "none", "null", "<na>", "-"])).sum()
+        print(f"[detail_check] {col}_valid={valid}/{len(db)}")
+
+
 def main():
     ensure_data_files()
 
@@ -499,14 +770,23 @@ def main():
         clip, err = fetch_song_public(song_id)
 
         if clip:
-            new_row = flatten_song(clip, old_row=row, source=row.get("source") or "public_song_page")
+            new_row = flatten_song(
+                clip,
+                old_row=row,
+                source=row.get("source") or "public_song_page",
+            )
+
             updated_rows.append(new_row)
             history_rows.append(history_snapshot(new_row))
             updated_ids.add(song_id)
             success += 1
+
             print(
                 f"[OK] {song_id} {new_row.get('title')} "
                 f"created_at={new_row.get('created_at')} "
+                f"lyrics={'yes' if not is_blank_value(new_row.get('lyrics')) else 'no'} "
+                f"prompt={'yes' if not is_blank_value(new_row.get('prompt')) else 'no'} "
+                f"gpt={'yes' if not is_blank_value(new_row.get('gpt_description_prompt')) else 'no'} "
                 f"play={new_row.get('play_count')} "
                 f"like={new_row.get('upvote_count')} "
                 f"comment={new_row.get('comment_count')}"
@@ -527,9 +807,21 @@ def main():
     else:
         final_db = db
 
+    if "id" in final_db.columns:
+        final_db["id"] = final_db["id"].astype(str)
+        final_db = final_db.drop_duplicates(subset=["id"], keep="first")
+
     if "created_at" in final_db.columns:
-        final_db["created_at_dt"] = pd.to_datetime(final_db["created_at"], errors="coerce", utc=True)
-        final_db = final_db.sort_values("created_at_dt", ascending=False, na_position="last")
+        final_db["created_at_dt"] = pd.to_datetime(
+            final_db["created_at"],
+            errors="coerce",
+            utc=True,
+        )
+        final_db = final_db.sort_values(
+            "created_at_dt",
+            ascending=False,
+            na_position="last",
+        )
         final_db = final_db.drop(columns=["created_at_dt"], errors="ignore")
 
     print(f"[before_prune] db_rows={len(final_db)}")
@@ -537,6 +829,8 @@ def main():
     final_db = prune_old_songs_and_history(final_db)
 
     print(f"[after_prune] db_rows={len(final_db)}")
+
+    detail_field_report(final_db)
 
     final_db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
 
@@ -552,7 +846,6 @@ def main():
         else:
             hist = hist_new
 
-        # 혹시 prune 이후 삭제된 곡이 있으면 history도 최종 DB 기준으로 한 번 더 정리
         kept_ids = set(final_db["id"].dropna().astype(str))
         hist["id"] = hist["id"].astype(str)
         hist = hist[hist["id"].isin(kept_ids)].copy()
@@ -571,46 +864,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-def save_dataframes(db, hist=None):
-    db_path = "data/suno_song_db.csv"
-    hist_path = "data/suno_song_history.csv"
-
-    os.makedirs("data", exist_ok=True)
-
-    if db is None:
-        raise RuntimeError("[save] db is None")
-
-    before_rows = len(db)
-
-    db = db.copy()
-
-    if "id" in db.columns:
-        db["id"] = db["id"].astype(str)
-        db = db.drop_duplicates(subset=["id"], keep="last")
-
-    if "created_at" in db.columns:
-        db = db.sort_values("created_at", ascending=False, na_position="last")
-
-    db.to_csv(db_path, index=False, encoding="utf-8")
-
-    check = pd.read_csv(db_path)
-    print(f"[save] db_rows_before_dedupe={before_rows}")
-    print(f"[save] db_rows_written={len(check)} -> {db_path}")
-
-    if len(check) <= 206:
-        raise RuntimeError(
-            f"[save] DB CSV still has {len(check)} rows after full update. Expected more than 206."
-        )
-
-    if hist is not None:
-        hist = hist.copy()
-
-        if not hist.empty:
-            hist.to_csv(hist_path, index=False, encoding="utf-8")
-            hist_check = pd.read_csv(hist_path)
-            print(f"[save] history_rows_written={len(hist_check)} -> {hist_path}")
-        else:
-            if not os.path.exists(hist_path):
-                hist.to_csv(hist_path, index=False, encoding="utf-8")
-            print(f"[save] history empty -> {hist_path}")
