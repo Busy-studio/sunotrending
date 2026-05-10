@@ -11,6 +11,11 @@ name: Update Suno Song Stats
         options:
           - full
           - fast
+          - manual_add
+      song_url:
+        description: "Suno song URL for manual_add mode"
+        required: false
+        type: string
 
   schedule:
     # Full update: 신규곡 수집 + 대량 업데이트
@@ -141,6 +146,15 @@ jobs:
           FRESHNESS_POWER: "1.35"
         run: |
           python scripts/update_top200_fast.py
+
+      - name: Manual add Suno song
+        if: steps.mode.outputs.mode == 'manual_add'
+        env:
+          MANUAL_SUNO_URL: ${{ github.event.inputs.song_url }}
+          SONG_RETENTION_DAYS: "4"
+          REQUEST_SLEEP_SECONDS: "0.5"
+        run: |
+          python scripts/manual_add_song.py
 
       - name: Repair DB if fast update shrank rows
         if: steps.mode.outputs.mode == 'fast'
