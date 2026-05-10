@@ -159,17 +159,17 @@ def flatten_song(song, old_row=None, source="public"):
 
         # 상세 페이지에서 가져올 수 있는 가사/프롬프트 후보
         "lyrics": (
-            song.get("lyrics")
-            or metadata.get("lyrics")
-            or metadata.get("lyric")
+            clean_text_field(song.get("lyrics"))
+            or clean_text_field(metadata.get("lyrics"))
+            or clean_text_field(metadata.get("lyric"))
         ),
         "prompt": (
-            song.get("prompt")
-            or metadata.get("prompt")
+            clean_text_field(song.get("prompt"))
+            or clean_text_field(metadata.get("prompt"))
         ),
         "gpt_description_prompt": (
-            song.get("gpt_description_prompt")
-            or metadata.get("gpt_description_prompt")
+            clean_text_field(song.get("gpt_description_prompt"))
+            or clean_text_field(metadata.get("gpt_description_prompt"))
         ),
 
         "song_url": f"https://suno.com/song/{song_id}" if song_id else None,
