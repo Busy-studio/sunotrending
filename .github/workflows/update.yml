@@ -136,12 +136,58 @@ jobs:
           else:
               print(f"[after] {hist_path} missing")
 
-          # full 모드에서 신규곡 수집 후에도 206 그대로면 저장 실패로 간주
           mode = "${{ steps.mode.outputs.mode }}"
           if mode == "full" and len(db) <= 206:
               print("[ERROR] Full update finished but DB CSV still has <= 206 rows.")
               print("[ERROR] update_public_song_pages.py probably did not save the expanded DB to data/suno_song_db.csv.")
               sys.exit(1)
+          PY
+
+      - name: Analyze comment quality
+        env:
+          COMMENT_ANALYZE_TOP_N: "200"
+          COMMENT_MAX_PAGES: "3"
+          COMMENT_MAX_ITEMS_PER_SONG: "120"
+          COMMENT_REQUEST_SLEEP_SECONDS: "0.4"
+          SONG_RETENTION_DAYS: "4"
+          GROWTH_WINDOW_HOURS: "3"
+          PLAY_WEIGHT: "1.0"
+          LIKE_WEIGHT: "3.0"
+          COMMENT_WEIGHT: "4.0"
+          GROWTH_WEIGHT: "2.5"
+          FRESHNESS_WEIGHT: "35.0"
+          FRESHNESS_POWER: "1.35"
+        run: |
+          python scripts/analyze_comment_quality.py
+
+      - name: Validate CSV after comment quality
+        run: |
+          echo "After comment quality analysis:"
+          ls -lh data || true
+
+          python - <<'PY'
+          import os
+          import sys
+          import pandas as pd
+
+          db_path = "data/suno_song_db.csv"
+          quality_path = "data/suno_comment_quality.csv"
+
+          if not os.path.exists(db_path):
+              print(f"[ERROR] Missing {db_path}")
+              sys.exit(1)
+
+          db = pd.read_csv(db_path)
+          print(f"[quality after] db_rows={len(db)}")
+
+          for col in ["adjusted_comment_count", "comment_quality_ratio"]:
+              print(f"[quality after] has_{col}={col in db.columns}")
+
+          if os.path.exists(quality_path):
+              q = pd.read_csv(quality_path)
+              print(f"[quality after] quality_rows={len(q)}")
+          else:
+              print(f"[quality after] {quality_path} missing")
           PY
 
       - name: Encrypt data
@@ -160,40 +206,5 @@ jobs:
         run: |
           rm -f data/suno_song_db.csv
           rm -f data/suno_song_history.csv
+          rm -f data/suno_comment_quality.csv
 
-      - name: Commit encrypted data
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          git fetch origin main
-
-          LOCAL_HEAD=$(git rev-parse HEAD)
-          REMOTE_HEAD=$(git rev-parse origin/main)
-
-          if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
-            echo "Remote main changed during this workflow."
-            echo "Skipping data commit to avoid binary ZIP conflict."
-            echo "Next scheduled run will update from the latest main."
-            exit 0
-          fi
-
-          git add data/suno_song_db.zip data/suno_song_history.zip
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            if [ "${{ steps.mode.outputs.mode }}" = "full" ]; then
-              git commit -m "Update encrypted Suno data"
-            else
-              git commit -m "Fast update Top 200 Suno stats"
-            fi
-
-            if git push origin main; then
-              echo "Pushed encrypted data successfully."
-            else
-              echo "Push was rejected, probably because remote main changed at the same time."
-              echo "Skipping this run safely. Next scheduled run will retry."
-              exit 0
-            fi
-          fi
