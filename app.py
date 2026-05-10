@@ -2509,16 +2509,7 @@ if st.button("데이터 새로고침"):
     st.rerun()
 
 try:
-    sync_result = sync_remote_data_files(DATA_RAW_BASE_URL, GITHUB_RAW_TOKEN)
-
-    if sync_result.get("enabled"):
-        st.caption(
-            "Remote data synced: "
-            + ", ".join(
-                f"{x['filename']} ({x['bytes']:,} bytes)"
-                for x in sync_result.get("downloaded", [])
-            )
-        )
+    sync_remote_data_files(DATA_RAW_BASE_URL, GITHUB_RAW_TOKEN)
 except Exception as e:
     st.warning(f"Remote data sync failed. Using existing local data files. Error: {e}")
 
