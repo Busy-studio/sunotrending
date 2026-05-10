@@ -532,9 +532,16 @@ def main():
         final_db = final_db.sort_values("created_at_dt", ascending=False, na_position="last")
         final_db = final_db.drop(columns=["created_at_dt"], errors="ignore")
 
+    print(f"[before_prune] db_rows={len(final_db)}")
+
     final_db = prune_old_songs_and_history(final_db)
 
+    print(f"[after_prune] db_rows={len(final_db)}")
+
     final_db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
+
+    check_db = pd.read_csv(DB_PATH)
+    print(f"[save_check] db_rows_written={len(check_db)} -> {DB_PATH}")
 
     if history_rows:
         hist_new = pd.DataFrame(history_rows)
@@ -551,6 +558,9 @@ def main():
         hist = hist[hist["id"].isin(kept_ids)].copy()
 
         hist.to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")
+
+        check_hist = pd.read_csv(HISTORY_PATH)
+        print(f"[save_check] history_rows_written={len(check_hist)} -> {HISTORY_PATH}")
 
     print(
         f"[done] new_added={added_count}, update_success={success}, "
