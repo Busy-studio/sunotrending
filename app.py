@@ -139,6 +139,17 @@ def safe_text(value):
 
     return s
 
+def is_fake_rsc_token(value):
+    s = safe_text(value)
+
+    if not s:
+        return True
+
+    if s.startswith("$") and len(s) <= 8:
+        return True
+
+    return False
+
 
 def safe_url(value):
     if pd.isna(value):
@@ -460,7 +471,12 @@ def build_song_payload(df):
         # 실제 가사/프롬프트 후보만 표시
         for col in ["lyrics", "prompt", "gpt_description_prompt"]:
             if col in r.index:
-                txt = safe_text(r.get(col, ""))
+                raw = r.get(col, "")
+
+                if is_fake_rsc_token(raw):
+                    continue
+
+                txt = safe_text(raw)
 
                 if txt:
                     lyrics_candidates.append(txt)
