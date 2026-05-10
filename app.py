@@ -360,12 +360,14 @@ def add_growth_features(db, hist, window_hours):
 
     db_created = db[["id", "created_at"]].copy()
     db_created["id"] = db_created["id"].astype(str)
+    db_created = db_created.rename(columns={"created_at": "song_created_at"})
+    db_created["song_created_at"] = pd.to_datetime(
+        db_created["song_created_at"],
+        errors="coerce",
+        utc=True,
+    )
 
-    if "created_at" in db_created.columns:
-        db_created["created_at"] = pd.to_datetime(db_created["created_at"], errors="coerce", utc=True)
-    else:
-        db_created["created_at"] = pd.NaT
-
+    # hist 안에 created_at이 이미 있어도 충돌 안 나게 song_created_at이라는 별도 이름으로 붙임
     hist = hist.merge(db_created, on="id", how="left")
 
     agg_rows = []
@@ -376,7 +378,7 @@ def add_growth_features(db, hist, window_hours):
         if g.empty:
             continue
 
-        created_at = g["created_at"].dropna()
+        created_at = g["song_created_at"].dropna()
 
         if created_at.empty:
             continue
