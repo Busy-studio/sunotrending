@@ -222,27 +222,39 @@ jobs:
           rm -f data/suno_song_history.csv
           rm -f data/suno_comment_quality.csv
 
-      - name: Commit encrypted data
+      - name: Commit encrypted data to data branch
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          git fetch origin main
+          DATA_BRANCH_DIR="/tmp/suno-data-branch"
 
-          LOCAL_HEAD=$(git rev-parse HEAD)
-          REMOTE_HEAD=$(git rev-parse origin/main)
+          rm -rf "$DATA_BRANCH_DIR"
 
-          if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
-            echo "Remote main changed during this workflow."
-            echo "Skipping data commit to avoid binary ZIP conflict."
-            echo "Next scheduled run will update from the latest main."
-            exit 0
+          git fetch origin data || true
+
+          if git show-ref --verify --quiet refs/remotes/origin/data; then
+            echo "Using existing origin/data branch"
+            git worktree add -B data "$DATA_BRANCH_DIR" origin/data
+          else
+            echo "Creating new data branch"
+            git worktree add -B data "$DATA_BRANCH_DIR"
+            cd "$DATA_BRANCH_DIR"
+            git rm -r . || true
+            cd -
           fi
+
+          mkdir -p "$DATA_BRANCH_DIR/data"
+
+          cp data/suno_song_db.zip "$DATA_BRANCH_DIR/data/suno_song_db.zip"
+          cp data/suno_song_history.zip "$DATA_BRANCH_DIR/data/suno_song_history.zip"
+
+          cd "$DATA_BRANCH_DIR"
 
           git add data/suno_song_db.zip data/suno_song_history.zip
 
           if git diff --cached --quiet; then
-            echo "No changes to commit"
+            echo "No encrypted data changes to commit on data branch"
           else
             if [ "${{ steps.mode.outputs.mode }}" = "full" ]; then
               git commit -m "Update encrypted Suno data"
@@ -250,11 +262,6 @@ jobs:
               git commit -m "Fast update Top 200 Suno stats"
             fi
 
-            if git push origin main; then
-              echo "Pushed encrypted data successfully."
-            else
-              echo "Push was rejected, probably because remote main changed at the same time."
-              echo "Skipping this run safely. Next scheduled run will retry."
-              exit 0
-            fi
+            git push origin HEAD:data
+            echo "Pushed encrypted data to data branch successfully."
           fi
