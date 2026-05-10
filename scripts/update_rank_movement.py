@@ -15,7 +15,7 @@ GROWTH_WINDOW_HOURS = int(os.getenv("GROWTH_WINDOW_HOURS", "3"))
 PLAY_WEIGHT = float(os.getenv("PLAY_WEIGHT", "1.0"))
 LIKE_WEIGHT = float(os.getenv("LIKE_WEIGHT", "3.0"))
 COMMENT_WEIGHT = float(os.getenv("COMMENT_WEIGHT", "4.0"))
-GROWTH_WEIGHT = float(os.getenv("GROWTH_WEIGHT", "2.5"))
+GROWTH_WEIGHT = float(os.getenv("GROWTH_WEIGHT", "1.5"))
 FRESHNESS_WEIGHT = float(os.getenv("FRESHNESS_WEIGHT", "35.0"))
 FRESHNESS_POWER = float(os.getenv("FRESHNESS_POWER", "1.35"))
 
@@ -134,21 +134,6 @@ def add_growth_features(db, hist, window_hours):
 
 def filter_view(df):
     view = df.copy()
-
-    if "is_contest_clip" in view.columns:
-        view = view[view["is_contest_clip"].astype(str).str.lower() != "true"]
-
-    if "download_disabled_reason" in view.columns:
-        view = view[view["download_disabled_reason"].astype(str) != "remix_contest"]
-
-    if "contest_ids" in view.columns:
-        contest_str = view["contest_ids"].astype(str).str.strip().str.lower()
-        view = view[
-            view["contest_ids"].isna()
-            | (contest_str == "")
-            | (contest_str == "nan")
-            | (contest_str == "none")
-        ].copy()
 
     if "created_at" in view.columns:
         cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=MAX_AGE_DAYS)
