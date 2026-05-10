@@ -2684,114 +2684,73 @@ total_songs = len(db)
 last_checked = db["last_checked_at"].max() if "last_checked_at" in db.columns else pd.NaT
 newest_created = db["created_at"].max() if "created_at" in db.columns else pd.NaT
 
-left_top, right_top = st.columns([1.05, 1.35], gap="large")
+left_top, right_top = st.columns([0.9, 1.1], gap="large")
+
+latest_created_txt = newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-"
+last_checked_txt = last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
 
 with left_top:
-    latest_created_txt = newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-"
-    last_checked_txt = last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
+    st.markdown("### 데이터 정보")
 
-    components.html(
-        f"""
-        <div style="
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            margin: 0;
-            padding: 0;
-            width: 100%;
-        ">
-            <div style="
-                font-size: 22px;
-                font-weight: 850;
-                margin-bottom: 12px;
-                color: #111827;
-                line-height: 1.2;
-            ">
-                데이터 정보
-            </div>
+    with st.container(border=True):
+        row1_label, row1_value = st.columns([0.45, 0.55])
+        with row1_label:
+            st.caption("DB 곡 수")
+        with row1_value:
+            st.markdown(
+                f"<div style='text-align:right; font-size:15px; font-weight:800;'>{total_songs:,}</div>",
+                unsafe_allow_html=True,
+            )
 
-            <div style="
-                border: 1px solid #e5e7eb;
-                border-radius: 14px;
-                background: #ffffff;
-                overflow: hidden;
-                width: 100%;
-            ">
-                <div style="
-                    display: grid;
-                    grid-template-columns: 110px 1fr;
-                    gap: 10px;
-                    align-items: center;
-                    padding: 10px 12px;
-                    border-bottom: 1px solid #eef2f7;
-                ">
-                    <div style="font-size: 12px; color: #6b7280; font-weight: 700;">DB 곡 수</div>
-                    <div style="font-size: 18px; color: #111827; font-weight: 850; text-align: right;">
-                        {total_songs:,}
-                    </div>
-                </div>
+        row2_label, row2_value = st.columns([0.45, 0.55])
+        with row2_label:
+            st.caption("최신 생성곡")
+        with row2_value:
+            st.markdown(
+                f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{latest_created_txt}</div>",
+                unsafe_allow_html=True,
+            )
 
-                <div style="
-                    display: grid;
-                    grid-template-columns: 110px 1fr;
-                    gap: 10px;
-                    align-items: center;
-                    padding: 10px 12px;
-                    border-bottom: 1px solid #eef2f7;
-                ">
-                    <div style="font-size: 12px; color: #6b7280; font-weight: 700;">최신 생성곡</div>
-                    <div style="font-size: 14px; color: #111827; font-weight: 800; text-align: right; white-space: nowrap;">
-                        {latest_created_txt}
-                    </div>
-                </div>
-
-                <div style="
-                    display: grid;
-                    grid-template-columns: 110px 1fr;
-                    gap: 10px;
-                    align-items: center;
-                    padding: 10px 12px;
-                ">
-                    <div style="font-size: 12px; color: #6b7280; font-weight: 700;">마지막 업데이트</div>
-                    <div style="font-size: 14px; color: #111827; font-weight: 800; text-align: right; white-space: nowrap;">
-                        {last_checked_txt}
-                    </div>
-                </div>
-            </div>
-        </div>
-        """,
-        height=155,
-        scrolling=False,
-    )
+        row3_label, row3_value = st.columns([0.45, 0.55])
+        with row3_label:
+            st.caption("마지막 업데이트")
+        with row3_value:
+            st.markdown(
+                f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{last_checked_txt}</div>",
+                unsafe_allow_html=True,
+            )
 
 with right_top:
     st.markdown("### 수동 곡 추가")
 
-    with st.form("manual_add_song_form", clear_on_submit=False):
-        manual_suno_url = st.text_input(
-            "Suno song link",
-            placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
-            label_visibility="collapsed",
-        )
+    with st.container(border=True):
+        with st.form("manual_add_song_form", clear_on_submit=False):
+            manual_suno_url = st.text_input(
+                "Suno song link",
+                placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
+                label_visibility="collapsed",
+            )
 
-        submit_col1, submit_col2 = st.columns([0.28, 0.72])
+            submit_col1, submit_col2 = st.columns([0.28, 0.72])
 
-        with submit_col1:
-            submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
+            with submit_col1:
+                submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
 
-        with submit_col2:
-            st.caption("지원 링크: /song/... 또는 /s/...")
+            with submit_col2:
+                st.caption("지원 링크: /song/... 또는 /s/...")
 
-    if submitted:
-        ok, msg = is_valid_suno_link(manual_suno_url)
+        if submitted:
+            ok, msg = is_valid_suno_link(manual_suno_url)
 
-        if not ok:
-            st.warning(msg)
-        else:
-            ok, msg = trigger_manual_add_workflow(manual_suno_url)
-
-            if ok:
-                st.success(msg)
+            if not ok:
+                st.warning(msg)
             else:
-                st.error(msg)
+                ok, msg = trigger_manual_add_workflow(manual_suno_url)
+
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
 
 st.divider()
 
