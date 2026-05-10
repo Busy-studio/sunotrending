@@ -468,7 +468,7 @@ def build_song_payload(df):
 
         lyrics_candidates = []
 
-        # display_tags는 장르/스타일 태그라서 제외
+        # display_tags는 장르/스타일 태그라서 가사 표시 후보에서는 제외
         # 실제 가사/프롬프트 후보만 표시
         for col in ["lyrics", "prompt", "gpt_description_prompt"]:
             if col in r.index:
@@ -491,6 +491,7 @@ def build_song_payload(df):
             "creator": display_name,
             "handle": handle_text,
             "created_at": created_txt,
+            "style_tags": safe_text(r.get("display_tags", "")),
             "play_count": int(float(r.get("play_count", 0) or 0)),
             "upvote_count": int(float(r.get("upvote_count", 0) or 0)),
             "comment_count": int(float(r.get("comment_count", 0) or 0)),
@@ -499,7 +500,7 @@ def build_song_payload(df):
             "image_url": safe_url(r.get("image_url", "")),
             "lyrics": lyrics_text,
 
-            # 랭킹정보용
+            # 상세정보용
             "trend_score": float(r.get("trend_score", 0) or 0),
             "base_score": float(r.get("base_score", 0) or 0),
             "growth_score": float(r.get("growth_score", 0) or 0),
@@ -901,7 +902,7 @@ def render_player_ranking(df, hist):
         border: 1px solid var(--line-dark);
         border-radius: 999px;
         padding: 9px 13px;
-        min-width: 240px;
+        min-width: 260px;
         outline: none;
     }
 
@@ -1046,6 +1047,38 @@ def render_player_ranking(df, hist):
     .title-link:hover {
         text-decoration: underline;
         color: var(--accent);
+    }
+
+    .style-cell {
+        overflow: hidden;
+        word-break: break-word;
+    }
+
+    .style-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        align-items: center;
+    }
+
+    .style-tag {
+        display: inline-block;
+        max-width: 100%;
+        border: 1px solid var(--line);
+        background: #f9fafb;
+        color: #374151;
+        border-radius: 999px;
+        padding: 3px 7px;
+        font-size: 11px;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .style-empty {
+        color: var(--muted);
+        font-size: 12px;
     }
 
     .subtle {
@@ -1286,7 +1319,7 @@ def render_player_ranking(df, hist):
                     <div class="ranking-title">Top 200 Trending</div>
                     <div class="ranking-sub">앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다.</div>
                 </div>
-                <input class="search-input" id="searchInput" placeholder="Search title / creator / handle">
+                <input class="search-input" id="searchInput" placeholder="Search title / style / creator / handle">
             </div>
 
             <div class="table-wrap">
@@ -1297,11 +1330,12 @@ def render_player_ranking(df, hist):
                             <th style="width:44px; text-align:right;">순위</th>
                             <th style="width:76px;">앨범</th>
                             <th>곡 제목</th>
-                            <th style="width:210px;">원작자</th>
+                            <th style="width:180px;">스타일</th>
+                            <th style="width:210px;">창작자</th>
                             <th style="width:90px; text-align:right;">플레이</th>
                             <th style="width:90px; text-align:right;">좋아요</th>
                             <th style="width:80px; text-align:right;">댓글</th>
-                            <th style="width:96px; text-align:center;">랭킹정보</th>
+                            <th style="width:96px; text-align:center;">상세정보</th>
                         </tr>
                     </thead>
                     <tbody id="songTableBody"></tbody>
@@ -1319,7 +1353,7 @@ def render_player_ranking(df, hist):
         <div class="modal-card">
             <div class="modal-head">
                 <div>
-                    <div class="modal-title" id="modalTitle">Ranking Info</div>
+                    <div class="modal-title" id="modalTitle">Detailed Info</div>
                     <div class="modal-sub" id="modalSub"></div>
                 </div>
                 <button class="modal-close" id="modalCloseBtn">×</button>
@@ -1435,6 +1469,51 @@ def render_player_ranking(df, hist):
         return `${m}:${String(s).padStart(2, "0")}`;
     }
 
+    function renderStyleTags(value) {
+        if (!value) {
+            return `<span class="style-empty">-</span>`;
+        }
+
+        let text = String(value).trim();
+
+        if (!text || text.toLowerCase() === "nan" || text.toLowerCase() === "none") {
+            return `<span class="style-empty">-</span>`;
+        }
+
+        let tags = [];
+
+        try {
+            const parsed = JSON.parse(text);
+
+            if (Array.isArray(parsed)) {
+                tags = parsed.map(x => String(x).trim()).filter(Boolean);
+            }
+        } catch (e) {
+            tags = [];
+        }
+
+        if (!tags.length) {
+            tags = text
+                .replaceAll("[", "")
+                .replaceAll("]", "")
+                .replaceAll('"', "")
+                .replaceAll("'", "")
+                .split(/[,|#]/)
+                .map(x => x.trim())
+                .filter(Boolean);
+        }
+
+        if (!tags.length) {
+            return `<span class="style-empty">-</span>`;
+        }
+
+        return `
+            <div class="style-tags">
+                ${tags.slice(0, 6).map(tag => `<span class="style-tag">${escapeHtml(tag)}</span>`).join("")}
+            </div>
+        `;
+    }
+
     function getCurrentSong() {
         if (currentIndex < 0 || currentIndex >= playlist.length) return null;
         return playlist[currentIndex];
@@ -1463,6 +1542,7 @@ def render_player_ranking(df, hist):
 
             const hay = [
                 song.title,
+                song.style_tags,
                 song.creator,
                 song.handle
             ].join(" ").toLowerCase();
@@ -1473,7 +1553,7 @@ def render_player_ranking(df, hist):
         if (!filtered.length) {
             songTableBody.innerHTML = `
                 <tr>
-                    <td colspan="9" style="padding:18px; text-align:center; color:#6b7280;">
+                    <td colspan="10" style="padding:18px; text-align:center; color:#6b7280;">
                         표시할 곡이 없습니다.
                     </td>
                 </tr>
@@ -1511,6 +1591,9 @@ def render_player_ranking(df, hist):
                         ${titleHtml}
                         <div class="subtle">${escapeHtml(song.created_at)}</div>
                     </td>
+                    <td class="style-cell">
+                        ${renderStyleTags(song.style_tags)}
+                    </td>
                     <td class="creator">
                         ${escapeHtml(song.creator)}
                         ${handleHtml}
@@ -1519,7 +1602,7 @@ def render_player_ranking(df, hist):
                     <td class="num">${formatInt(song.upvote_count)}</td>
                     <td class="num">${formatInt(song.comment_count)}</td>
                     <td style="text-align:center;">
-                        <button class="rank-info-btn" data-action="rank-info" data-song-id="${escapeHtml(song.id)}">랭킹정보</button>
+                        <button class="rank-info-btn" data-action="rank-info" data-song-id="${escapeHtml(song.id)}">상세정보</button>
                     </td>
                 </tr>
             `;
