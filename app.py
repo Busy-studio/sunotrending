@@ -456,7 +456,10 @@ def build_song_payload(df):
 
         lyrics_candidates = []
 
-        for col in ["lyrics", "prompt", "gpt_description_prompt", "display_tags"]:
+        # display_tags는 장르/스타일 태그라서 가사창에서 제외
+        # 실제 lyrics 컬럼이 생기면 lyrics를 우선 표시
+        # prompt/gpt_description_prompt는 임시 정보로만 사용
+        for col in ["lyrics", "prompt", "gpt_description_prompt"]:
             if col in r.index:
                 txt = safe_text(r.get(col, ""))
 
@@ -1001,6 +1004,10 @@ def render_player_ranking(df):
             <div class="now-title" id="nowTitle">플레이리스트에 곡을 추가하세요</div>
             <div class="now-creator" id="nowCreator">앨범 이미지나 + 버튼을 누르면 추가됩니다.</div>
 
+            <div class="lyrics-panel empty" id="lyricsPanel">
+                가사/프롬프트 정보가 있으면 여기에 표시됩니다.
+            </div>
+
             <div class="progress-wrap">
                 <input id="progress" type="range" min="0" max="1000" value="0">
                 <div class="time-row">
@@ -1043,9 +1050,6 @@ def render_player_ranking(df):
                 </div>
             </div>
 
-            <div class="lyrics-panel empty" id="lyricsPanel">
-                가사/프롬프트 정보가 있으면 여기에 표시됩니다.
-            </div>
         </aside>
 
         <main class="ranking-panel">
