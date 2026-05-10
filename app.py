@@ -47,7 +47,7 @@ GITHUB_REPO_NAME = st.secrets.get(
 
 GITHUB_WORKFLOW_FILE = st.secrets.get(
     "GITHUB_WORKFLOW_FILE",
-    os.getenv("GITHUB_WORKFLOW_FILE", "update_suno_song_stats.yml"),
+    os.getenv("GITHUB_WORKFLOW_FILE", "update.yml"),
 )
 
 GITHUB_ACTION_TOKEN = st.secrets.get(
@@ -399,7 +399,11 @@ def queue_manual_song_url(song_url):
                 decoded = base64.b64decode(encoded).decode("utf-8-sig")
 
                 if decoded.strip():
-                    queue_df = pd.read_csv(StringIO(decoded))
+                    queue_df = pd.read_csv(
+                        StringIO(decoded),
+                        dtype=str,
+                        keep_default_na=False,
+                    )
                 else:
                     queue_df = pd.DataFrame(columns=columns)
 
@@ -414,8 +418,8 @@ def queue_manual_song_url(song_url):
                 if col not in queue_df.columns:
                     queue_df[col] = ""
 
-            queue_df["url"] = queue_df["url"].astype(str)
-            queue_df["status"] = queue_df["status"].astype(str)
+            for col in columns:
+                queue_df[col] = queue_df[col].fillna("").astype(str)
 
             duplicated_pending = queue_df[
                 (queue_df["url"].str.strip() == clean_url)
@@ -2183,7 +2187,7 @@ function cycleSort(key) {
         audio.volume = v;
     }
 
-    function renderTable(filterText = "") {
+        function renderTable(filterText = "") {
         const q = filterText.trim().toLowerCase();
 
         let filtered = songs.filter(song => {
@@ -2276,7 +2280,7 @@ function cycleSort(key) {
         refreshButtonsAndCovers();
     }
 
-    function bindTableEvents() {
+        function bindTableEvents() {
         songTableBody.querySelectorAll("[data-action='toggle-playlist']").forEach(btn => {
             btn.addEventListener("click", event => {
                 event.preventDefault();
@@ -2284,6 +2288,23 @@ function cycleSort(key) {
                 togglePlaylist(btn.dataset.songId);
             });
         });
+
+        songTableBody.querySelectorAll("[data-action='cover-click']").forEach(btn => {
+            btn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                coverClick(btn.dataset.songId);
+            });
+        });
+
+        songTableBody.querySelectorAll("[data-action='rank-info']").forEach(btn => {
+            btn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                openRankingInfo(btn.dataset.songId);
+            });
+        });
+    }
 
     function bindSortHeaderEvents() {
         document.querySelectorAll("th.sortable").forEach(th => {
