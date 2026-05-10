@@ -561,3 +561,46 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def save_dataframes(db, hist=None):
+    db_path = "data/suno_song_db.csv"
+    hist_path = "data/suno_song_history.csv"
+
+    os.makedirs("data", exist_ok=True)
+
+    if db is None:
+        raise RuntimeError("[save] db is None")
+
+    before_rows = len(db)
+
+    db = db.copy()
+
+    if "id" in db.columns:
+        db["id"] = db["id"].astype(str)
+        db = db.drop_duplicates(subset=["id"], keep="last")
+
+    if "created_at" in db.columns:
+        db = db.sort_values("created_at", ascending=False, na_position="last")
+
+    db.to_csv(db_path, index=False, encoding="utf-8")
+
+    check = pd.read_csv(db_path)
+    print(f"[save] db_rows_before_dedupe={before_rows}")
+    print(f"[save] db_rows_written={len(check)} -> {db_path}")
+
+    if len(check) <= 206:
+        raise RuntimeError(
+            f"[save] DB CSV still has {len(check)} rows after full update. Expected more than 206."
+        )
+
+    if hist is not None:
+        hist = hist.copy()
+
+        if not hist.empty:
+            hist.to_csv(hist_path, index=False, encoding="utf-8")
+            hist_check = pd.read_csv(hist_path)
+            print(f"[save] history_rows_written={len(hist_check)} -> {hist_path}")
+        else:
+            if not os.path.exists(hist_path):
+                hist.to_csv(hist_path, index=False, encoding="utf-8")
+            print(f"[save] history empty -> {hist_path}")
