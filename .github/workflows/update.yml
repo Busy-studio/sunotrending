@@ -68,6 +68,38 @@ jobs:
         run: |
           python scripts/decrypt_data.py
 
+      - name: Backup CSV before update
+        run: |
+          mkdir -p /tmp/suno-backup
+
+          if [ -f data/suno_song_db.csv ]; then
+            cp data/suno_song_db.csv /tmp/suno-backup/suno_song_db_before.csv
+          fi
+
+          if [ -f data/suno_song_history.csv ]; then
+            cp data/suno_song_history.csv /tmp/suno-backup/suno_song_history_before.csv
+          fi
+
+          python - <<'PY'
+          import os
+          import pandas as pd
+
+          db_path = "/tmp/suno-backup/suno_song_db_before.csv"
+          hist_path = "/tmp/suno-backup/suno_song_history_before.csv"
+
+          if os.path.exists(db_path):
+              db = pd.read_csv(db_path)
+              print(f"[backup] db_rows_before={len(db)}")
+          else:
+              print("[backup] db backup missing")
+
+          if os.path.exists(hist_path):
+              hist = pd.read_csv(hist_path)
+              print(f"[backup] history_rows_before={len(hist)}")
+          else:
+              print("[backup] history backup missing")
+          PY
+
       - name: Debug CSV before update
         run: |
           echo "Before update:"
@@ -104,11 +136,70 @@ jobs:
           PLAY_WEIGHT: "1.0"
           LIKE_WEIGHT: "3.0"
           COMMENT_WEIGHT: "4.0"
-          GROWTH_WEIGHT: "2.5"
+          GROWTH_WEIGHT: "1.5"
           FRESHNESS_WEIGHT: "35.0"
           FRESHNESS_POWER: "1.35"
         run: |
           python scripts/update_top200_fast.py
+
+      - name: Repair DB if fast update shrank rows
+        if: steps.mode.outputs.mode == 'fast'
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import pandas as pd
+
+          before_path = "/tmp/suno-backup/suno_song_db_before.csv"
+          after_path = "data/suno_song_db.csv"
+
+          if not os.path.exists(before_path):
+              print("[fast repair] backup missing, skip")
+              sys.exit(0)
+
+          if not os.path.exists(after_path):
+              print("[fast repair] after DB missing")
+              sys.exit(1)
+
+          before = pd.read_csv(before_path)
+          after = pd.read_csv(after_path)
+
+          print(f"[fast repair] before_rows={len(before)} after_rows={len(after)}")
+
+          if "id" not in before.columns or "id" not in after.columns:
+              print("[fast repair] id column missing, skip")
+              sys.exit(0)
+
+          before["id"] = before["id"].astype(str)
+          after["id"] = after["id"].astype(str)
+
+          if len(after) < len(before):
+              after_ids = set(after["id"].dropna().astype(str))
+              restored_old = before[~before["id"].isin(after_ids)].copy()
+
+              repaired = pd.concat([after, restored_old], ignore_index=True)
+
+              if "created_at" in repaired.columns:
+                  repaired["created_at_dt"] = pd.to_datetime(
+                      repaired["created_at"],
+                      errors="coerce",
+                      utc=True,
+                  )
+                  repaired = repaired.sort_values(
+                      "created_at_dt",
+                      ascending=False,
+                      na_position="last",
+                  )
+                  repaired = repaired.drop(columns=["created_at_dt"], errors="ignore")
+
+              repaired = repaired.drop_duplicates(subset=["id"], keep="first")
+              repaired.to_csv(after_path, index=False, encoding="utf-8-sig")
+
+              check = pd.read_csv(after_path)
+              print(f"[fast repair] repaired_rows={len(check)} -> {after_path}")
+          else:
+              print("[fast repair] no shrink detected")
+          PY
 
       - name: Validate CSV after update
         run: |
@@ -137,10 +228,21 @@ jobs:
               print(f"[after] {hist_path} missing")
 
           mode = "${{ steps.mode.outputs.mode }}"
+
           if mode == "full" and len(db) <= 206:
               print("[ERROR] Full update finished but DB CSV still has <= 206 rows.")
               print("[ERROR] update_public_song_pages.py probably did not save the expanded DB to data/suno_song_db.csv.")
               sys.exit(1)
+
+          if mode == "fast":
+              before_path = "/tmp/suno-backup/suno_song_db_before.csv"
+
+              if os.path.exists(before_path):
+                  before = pd.read_csv(before_path)
+                  if len(db) < len(before):
+                      print("[ERROR] Fast update still shrank DB after repair.")
+                      print(f"[ERROR] before={len(before)} after={len(db)}")
+                      sys.exit(1)
           PY
 
       - name: Analyze comment quality
@@ -154,7 +256,7 @@ jobs:
           PLAY_WEIGHT: "1.0"
           LIKE_WEIGHT: "3.0"
           COMMENT_WEIGHT: "4.0"
-          GROWTH_WEIGHT: "2.5"
+          GROWTH_WEIGHT: "1.5"
           FRESHNESS_WEIGHT: "35.0"
           FRESHNESS_POWER: "1.35"
         run: |
@@ -168,7 +270,7 @@ jobs:
           PLAY_WEIGHT: "1.0"
           LIKE_WEIGHT: "3.0"
           COMMENT_WEIGHT: "4.0"
-          GROWTH_WEIGHT: "2.5"
+          GROWTH_WEIGHT: "1.5"
           FRESHNESS_WEIGHT: "35.0"
           FRESHNESS_POWER: "1.35"
         run: |
@@ -194,7 +296,7 @@ jobs:
           db = pd.read_csv(db_path)
           print(f"[quality after] db_rows={len(db)}")
 
-          for col in ["adjusted_comment_count", "comment_quality_ratio"]:
+          for col in ["adjusted_comment_count", "comment_quality_ratio", "previous_rank", "current_rank", "rank_change", "rank_status"]:
               print(f"[quality after] has_{col}={col in db.columns}")
 
           if os.path.exists(quality_path):
