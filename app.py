@@ -800,7 +800,7 @@ def render_player_ranking(df, hist):
         display: grid;
         grid-template-columns: 34px 1fr 28px;
         gap: 8px;
-        align-items: center;
+        align-items: start;
         padding: 8px;
         border-bottom: 1px solid var(--line);
         cursor: pointer;
@@ -824,6 +824,7 @@ def render_player_ranking(df, hist):
 
     .playlist-meta {
         overflow: hidden;
+        min-width: 0;
     }
 
     .playlist-song-title {
@@ -832,6 +833,63 @@ def render_player_ranking(df, hist):
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+    }
+
+    .playlist-style-row {
+        margin: 3px 0 2px 0;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        min-width: 0;
+    }
+
+    .playlist-style-toggle {
+        border: 1px solid var(--line-dark);
+        background: #ffffff;
+        color: var(--muted);
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 800;
+        padding: 2px 6px;
+        cursor: pointer;
+        flex: 0 0 auto;
+    }
+
+    .playlist-style-tags {
+        display: flex;
+        gap: 3px;
+        align-items: center;
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    .playlist-style-tags.collapsed {
+        flex-wrap: nowrap;
+        white-space: nowrap;
+    }
+
+    .playlist-style-tags.expanded {
+        flex-wrap: wrap;
+        white-space: normal;
+    }
+
+    .playlist-style-tag {
+        display: inline-block;
+        max-width: 82px;
+        border: 1px solid var(--line);
+        background: #f9fafb;
+        color: #374151;
+        border-radius: 999px;
+        padding: 2px 6px;
+        font-size: 10px;
+        line-height: 1.2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .playlist-style-tags.expanded .playlist-style-tag {
+        max-width: 140px;
     }
 
     .playlist-song-sub {
@@ -1389,6 +1447,7 @@ def render_player_ranking(df, hist):
     let repeatOne = false;
     let repeatAll = true;
     let playbackMode = "sequence";
+    let expandedPlaylistStyleIds = new Set();
 
     const nowCoverWrap = document.getElementById("nowCoverWrap");
     const nowTitle = document.getElementById("nowTitle");
@@ -1434,6 +1493,16 @@ def render_player_ranking(df, hist):
             .replaceAll("'", "&#039;");
     }
 
+    function escapeJsString(text) {
+        if (text === null || text === undefined) return "";
+        return String(text)
+            .replaceAll("\\\\", "\\\\\\\\")
+            .replaceAll("'", "\\\\'")
+            .replaceAll('"', "\\\\\"")
+            .replaceAll("\\n", "\\\\n")
+            .replaceAll("\\r", "\\\\r");
+    }
+
     function formatInt(n) {
         try {
             return Number(n || 0).toLocaleString();
@@ -1459,15 +1528,13 @@ def render_player_ranking(df, hist):
         return `${m}:${String(s).padStart(2, "0")}`;
     }
 
-    function renderStyleTags(value) {
-        if (!value) {
-            return `<span class="style-empty">-</span>`;
-        }
+    function parseStyleTags(value) {
+        if (!value) return [];
 
         let text = String(value).trim();
 
         if (!text || text.toLowerCase() === "nan" || text.toLowerCase() === "none") {
-            return `<span class="style-empty">-</span>`;
+            return [];
         }
 
         let tags = [];
@@ -1493,6 +1560,12 @@ def render_player_ranking(df, hist):
                 .filter(Boolean);
         }
 
+        return tags;
+    }
+
+    function renderStyleTags(value) {
+        const tags = parseStyleTags(value);
+
         if (!tags.length) {
             return `<span class="style-empty">-</span>`;
         }
@@ -1503,6 +1576,48 @@ def render_player_ranking(df, hist):
             </div>
         `;
     }
+
+    function renderPlaylistStyleTags(song) {
+        const tags = parseStyleTags(song.style_tags);
+
+        if (!tags.length) {
+            return "";
+        }
+
+        const id = String(song.id);
+        const expanded = expandedPlaylistStyleIds.has(id);
+        const visibleTags = expanded ? tags : tags.slice(0, 2);
+        const modeClass = expanded ? "expanded" : "collapsed";
+        const toggleText = expanded ? "접기" : `스타일 ${tags.length > 2 ? "+" + (tags.length - 2) : ""}`;
+
+        return `
+            <div class="playlist-style-row">
+                <button class="playlist-style-toggle" onclick="togglePlaylistStyle('${escapeJsString(id)}', event)">${toggleText}</button>
+                <div class="playlist-style-tags ${modeClass}">
+                    ${visibleTags.map(tag => `<span class="playlist-style-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`).join("")}
+                </div>
+            </div>
+        `;
+    }
+
+    function togglePlaylistStyle(id, event) {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+
+        const key = String(id);
+
+        if (expandedPlaylistStyleIds.has(key)) {
+            expandedPlaylistStyleIds.delete(key);
+        } else {
+            expandedPlaylistStyleIds.add(key);
+        }
+
+        renderPlaylist();
+    }
+
+    window.togglePlaylistStyle = togglePlaylistStyle;
 
     function getCurrentSong() {
         if (currentIndex < 0 || currentIndex >= playlist.length) return null;
@@ -1661,6 +1776,7 @@ def render_player_ranking(df, hist):
         const wasCurrent = idx === currentIndex;
 
         playlist.splice(idx, 1);
+        expandedPlaylistStyleIds.delete(String(id));
 
         if (playlist.length === 0) {
             currentIndex = -1;
@@ -1743,9 +1859,10 @@ def render_player_ranking(df, hist):
                     ${thumb}
                     <div class="playlist-meta">
                         <div class="playlist-song-title">${escapeHtml(song.title)}</div>
+                        ${renderPlaylistStyleTags(song)}
                         <div class="playlist-song-sub">${escapeHtml(song.creator)} ${escapeHtml(song.handle || "")}</div>
                     </div>
-                    <button class="remove-btn" onclick="removeFromPlaylist('${escapeHtml(song.id)}', event)">×</button>
+                    <button class="remove-btn" onclick="removeFromPlaylist('${escapeJsString(song.id)}', event)">×</button>
                 </div>
             `;
         }).join("");
@@ -1997,6 +2114,7 @@ def render_player_ranking(df, hist):
     clearBtn.addEventListener("click", () => {
         playlist = [];
         currentIndex = -1;
+        expandedPlaylistStyleIds = new Set();
         audio.pause();
         audio.removeAttribute("src");
         updateNowPlaying(null);
@@ -2046,6 +2164,25 @@ def render_player_ranking(df, hist):
     searchInput.addEventListener("input", () => {
         renderTable(searchInput.value);
     });
+
+    function openRankingInfo(id) {
+        const song = getSongById(id);
+
+        if (!song) return;
+
+        modalTitle.textContent = `#${song.rank} ${song.title}`;
+        modalSub.textContent = `${song.creator || ""} ${song.handle || ""}`.trim();
+
+        scoreTrend.textContent = formatFloat(song.trend_score);
+        scoreBase.textContent = formatFloat(song.base_score);
+        scoreGrowth.textContent = formatFloat(song.growth_score);
+        scoreFreshness.textContent = formatFloat(song.freshness_score);
+
+        rankingModal.classList.add("open");
+        drawHistoryChart(id);
+    }
+
+    window.openRankingInfo = openRankingInfo;
 
     function drawHistoryChart(id) {
         const ctx = historyCanvas.getContext("2d");
