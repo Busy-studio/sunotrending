@@ -32,6 +32,10 @@ GROWTH_WEIGHT = 2.5
 FRESHNESS_WEIGHT = 35.0
 FRESHNESS_POWER = 1.35
 
+# 이상치 표시 설정
+OUTLIER_SIGMA = 3.0
+OUTLIER_USE_LOG = True
+
 
 st.set_page_config(
     page_title="Suno Trending",
@@ -410,6 +414,54 @@ def score_songs(
     return view
 
 
+def add_outlier_flags(df, sigma=3.0, use_log=True):
+    view = df.copy()
+
+    metrics = {
+        "play_count": "play",
+        "upvote_count": "like",
+        "comment_count": "comment",
+    }
+
+    view["is_outlier"] = False
+    view["outlier_reasons"] = ""
+
+    reason_lists = [[] for _ in range(len(view))]
+
+    for col, label in metrics.items():
+        if col not in view.columns:
+            continue
+
+        values = pd.to_numeric(view[col], errors="coerce").fillna(0)
+
+        if use_log:
+            values_for_z = values.apply(lambda x: math.log1p(max(0, x)))
+        else:
+            values_for_z = values
+
+        mean = values_for_z.mean()
+        std = values_for_z.std(ddof=0)
+
+        if std == 0 or pd.isna(std):
+            continue
+
+        z = (values_for_z - mean) / std
+        flag = z >= sigma
+
+        view[f"{label}_zscore"] = z
+        view[f"{label}_outlier"] = flag
+
+        for i, is_flagged in enumerate(flag.tolist()):
+            if is_flagged:
+                raw_value = int(values.iloc[i])
+                reason_lists[i].append(f"{label} {raw_value:,} / z={z.iloc[i]:.2f}")
+
+    view["is_outlier"] = [len(x) > 0 for x in reason_lists]
+    view["outlier_reasons"] = [" | ".join(x) for x in reason_lists]
+
+    return view
+
+
 def filter_view(df):
     view = df.copy()
 
@@ -473,6 +525,9 @@ def build_song_payload(df):
 
         lyrics_text = "\n\n".join(lyrics_candidates)
 
+        raw_outlier = r.get("is_outlier", False)
+        is_outlier = False if pd.isna(raw_outlier) else bool(raw_outlier)
+
         songs.append({
             "rank": int(r.get("rank", 0)),
             "id": safe_text(r.get("id", "")),
@@ -484,6 +539,8 @@ def build_song_payload(df):
             "play_count": int(float(r.get("play_count", 0) or 0)),
             "upvote_count": int(float(r.get("upvote_count", 0) or 0)),
             "comment_count": int(float(r.get("comment_count", 0) or 0)),
+            "is_outlier": is_outlier,
+            "outlier_reasons": safe_text(r.get("outlier_reasons", "")),
             "song_url": safe_url(r.get("song_url", "")),
             "audio_url": safe_url(r.get("audio_url", "")),
             "image_url": safe_url(r.get("image_url", "")),
@@ -939,6 +996,28 @@ def render_player_ranking(df, hist):
     }
 
     .song-table tr:hover { background: #f9fafb; }
+
+    .song-table tr.outlier-row {
+        background: #fff7ed;
+    }
+
+    .song-table tr.outlier-row:hover {
+        background: #ffedd5;
+    }
+
+    .outlier-badge {
+        display: inline-block;
+        margin-left: 6px;
+        border: 1px solid #f97316;
+        background: #fed7aa;
+        color: #9a3412;
+        border-radius: 999px;
+        padding: 2px 6px;
+        font-size: 10px;
+        font-weight: 900;
+        vertical-align: middle;
+        white-space: nowrap;
+    }
 
     .select-cell { text-align: center; }
 
@@ -1556,8 +1635,13 @@ def render_player_ranking(df, hist):
                 ? `<div class="subtle">${escapeHtml(song.handle)}</div>`
                 : "";
 
+            const outlierClass = song.is_outlier ? "outlier-row" : "";
+            const outlierBadge = song.is_outlier
+                ? `<span class="outlier-badge" title="${escapeHtml(song.outlier_reasons)}">⚠ 3σ</span>`
+                : "";
+
             return `
-                <tr data-song-id="${escapeHtml(song.id)}">
+                <tr class="${outlierClass}" data-song-id="${escapeHtml(song.id)}">
                     <td class="select-cell">
                         <button class="add-btn" data-action="toggle-playlist" data-song-id="${escapeHtml(song.id)}" title="선택 / 해제">+</button>
                     </td>
@@ -1570,7 +1654,7 @@ def render_player_ranking(df, hist):
                         </div>
                     </td>
                     <td class="title-cell">
-                        ${titleHtml}
+                        ${titleHtml} ${outlierBadge}
                         <div class="subtle">${escapeHtml(song.created_at)}</div>
                     </td>
                     <td class="style-cell">
@@ -2215,6 +2299,7 @@ scored = score_songs(
 )
 
 view = filter_view(scored)
+view = add_outlier_flags(view, sigma=OUTLIER_SIGMA, use_log=OUTLIER_USE_LOG)
 
 view = view.sort_values("trend_score", ascending=False, na_position="last").head(TOP_N).copy()
 view = view.reset_index(drop=True)
