@@ -32,6 +32,26 @@ GITHUB_RAW_TOKEN = st.secrets.get(
     os.getenv("GITHUB_RAW_TOKEN", ""),
 )
 
+GITHUB_REPO_OWNER = st.secrets.get(
+    "GITHUB_REPO_OWNER",
+    os.getenv("GITHUB_REPO_OWNER", "Busy-studio"),
+)
+
+GITHUB_REPO_NAME = st.secrets.get(
+    "GITHUB_REPO_NAME",
+    os.getenv("GITHUB_REPO_NAME", "sunotrending"),
+)
+
+GITHUB_WORKFLOW_FILE = st.secrets.get(
+    "GITHUB_WORKFLOW_FILE",
+    os.getenv("GITHUB_WORKFLOW_FILE", "update_suno_song_stats.yml"),
+)
+
+GITHUB_ACTION_TOKEN = st.secrets.get(
+    "GITHUB_ACTION_TOKEN",
+    os.getenv("GITHUB_ACTION_TOKEN", ""),
+)
+
 RETENTION_HOURS = 96  # 4일
 TOP_N = 200
 
@@ -285,6 +305,75 @@ def sync_remote_data_files(raw_base_url, github_token=""):
         "message": "Remote data files synced.",
         "downloaded": downloaded,
     }
+
+def is_valid_suno_link(url):
+    url = str(url or "").strip()
+
+    if not url:
+        return False, "Suno 링크를 입력하세요."
+
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        path = parsed.path.strip()
+
+        if parsed.scheme not in ["http", "https"]:
+            return False, "http 또는 https 링크만 사용할 수 있습니다."
+
+        if host not in ["suno.com", "www.suno.com"]:
+            return False, "suno.com 링크만 사용할 수 있습니다."
+
+        if path.startswith("/song/"):
+            return True, ""
+
+        if path.startswith("/s/"):
+            return True, ""
+
+        return False, "지원하는 링크 형식은 /song/... 또는 /s/... 입니다."
+    except Exception as e:
+        return False, f"링크 확인 중 오류: {e}"
+
+
+def trigger_manual_add_workflow(song_url):
+    if not GITHUB_ACTION_TOKEN:
+        return False, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
+
+    api_url = (
+        f"https://api.github.com/repos/"
+        f"{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+        f"/actions/workflows/{GITHUB_WORKFLOW_FILE}/dispatches"
+    )
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {GITHUB_ACTION_TOKEN}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    payload = {
+        "ref": "main",
+        "inputs": {
+            "mode": "manual_add",
+            "song_url": song_url.strip(),
+        },
+    }
+
+    try:
+        response = requests.post(
+            api_url,
+            headers=headers,
+            json=payload,
+            timeout=20,
+        )
+
+        if response.status_code in [200, 201, 202, 204]:
+            return True, "수동 곡 수집 요청을 보냈습니다. Actions 완료 후 데이터 새로고침을 눌러 확인하세요."
+
+        return False, f"GitHub Actions 요청 실패: {response.status_code} / {response.text[:500]}"
+    except Exception as e:
+        return False, f"GitHub Actions 요청 중 오류: {e}"
 
 # ================================
 # Data loading
@@ -2601,5 +2690,24 @@ m2.metric("최신 생성곡", newest_created.strftime("%Y-%m-%d %H:%M UTC") if p
 m3.metric("마지막 업데이트", last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-")
 
 st.divider()
+st.subheader("수동 곡 추가")
+
+manual_suno_url = st.text_input(
+    "Suno song link",
+    placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
+)
+
+if st.button("곡 정보 수집 요청"):
+    ok, msg = is_valid_suno_link(manual_suno_url)
+
+    if not ok:
+        st.warning(msg)
+    else:
+        ok, msg = trigger_manual_add_workflow(manual_suno_url)
+
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
 
 render_player_ranking(view, hist)
