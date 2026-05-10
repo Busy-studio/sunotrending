@@ -45,19 +45,40 @@ QUEUE_COLUMNS = [
 
 def load_queue():
     if not os.path.exists(QUEUE_PATH):
-        return pd.DataFrame(columns=QUEUE_COLUMNS)
-
-    q = pd.read_csv(QUEUE_PATH)
+        q = pd.DataFrame(columns=QUEUE_COLUMNS)
+    else:
+        q = pd.read_csv(
+            QUEUE_PATH,
+            dtype=str,
+            keep_default_na=False,
+        )
 
     for col in QUEUE_COLUMNS:
         if col not in q.columns:
             q[col] = ""
 
-    return q[QUEUE_COLUMNS].copy()
+    q = q[QUEUE_COLUMNS].copy()
+
+    for col in QUEUE_COLUMNS:
+        q[col] = q[col].fillna("").astype(str)
+
+    return q
 
 
 def save_queue(q):
     os.makedirs(os.path.dirname(QUEUE_PATH), exist_ok=True)
+
+    q = q.copy()
+
+    for col in QUEUE_COLUMNS:
+        if col not in q.columns:
+            q[col] = ""
+
+    q = q[QUEUE_COLUMNS].copy()
+
+    for col in QUEUE_COLUMNS:
+        q[col] = q[col].fillna("").astype(str)
+
     q.to_csv(QUEUE_PATH, index=False, encoding="utf-8-sig")
 
 
