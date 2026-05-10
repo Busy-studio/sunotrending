@@ -2706,14 +2706,15 @@ with right_top:
 
     with st.form("manual_add_song_form", clear_on_submit=False):
         manual_suno_url = st.text_input(
+            "Suno song link",
             placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
-            label_visibility="visible",
+            label_visibility="collapsed",
         )
 
         submit_col1, submit_col2 = st.columns([0.28, 0.72])
 
         with submit_col1:
-            submitted = st.form_submit_button("수집 요청", use_container_width=True)
+            submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
 
         with submit_col2:
             st.caption("지원 링크: /song/... 또는 /s/...")
