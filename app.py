@@ -2687,18 +2687,57 @@ newest_created = db["created_at"].max() if "created_at" in db.columns else pd.Na
 left_top, right_top = st.columns([1.05, 1.35], gap="large")
 
 with left_top:
-    st.markdown("### 데이터 정보")
+    latest_created_txt = newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-"
+    last_checked_txt = last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
 
-    info1, info2, info3 = st.columns(3)
+    st.markdown(
+        f"""
+        <div style="margin-bottom: 6px;">
+            <div style="font-size: 20px; font-weight: 800; margin-bottom: 10px;">데이터 정보</div>
 
-    info1.metric("DB 곡 수", f"{total_songs:,}")
-    info2.metric(
-        "최신 생성곡",
-        newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-"
-    )
-    info3.metric(
-        "마지막 업데이트",
-        last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
+            <div style="
+                display: grid;
+                grid-template-columns: 0.65fr 1.35fr 1.35fr;
+                gap: 12px;
+                align-items: stretch;
+            ">
+                <div style="
+                    border: 1px solid #e5e7eb;
+                    border-radius: 14px;
+                    padding: 12px 14px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">DB 곡 수</div>
+                    <div style="font-size: 22px; font-weight: 850; line-height: 1.15;">{total_songs:,}</div>
+                </div>
+
+                <div style="
+                    border: 1px solid #e5e7eb;
+                    border-radius: 14px;
+                    padding: 12px 14px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">최신 생성곡</div>
+                    <div style="font-size: 18px; font-weight: 800; line-height: 1.15; white-space: nowrap;">
+                        {latest_created_txt}
+                    </div>
+                </div>
+
+                <div style="
+                    border: 1px solid #e5e7eb;
+                    border-radius: 14px;
+                    padding: 12px 14px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 12px; color: #6b7280; margin-bottom: 5px;">마지막 업데이트</div>
+                    <div style="font-size: 18px; font-weight: 800; line-height: 1.15; white-space: nowrap;">
+                        {last_checked_txt}
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 with right_top:
