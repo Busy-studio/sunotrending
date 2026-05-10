@@ -139,6 +139,27 @@ def fetch_song_public(song_id):
     except Exception as e:
         return None, repr(e)
 
+def clean_text_field(value):
+    if value is None:
+        return None
+
+    if isinstance(value, (dict, list)):
+        return None
+
+    s = str(value).strip()
+
+    if not s:
+        return None
+
+    if s.lower() in ["nan", "none", "null", "undefined"]:
+        return None
+
+    # Next.js / RSC 참조 토큰 제거: $5b, $12, $abc 같은 값
+    if s.startswith("$") and len(s) <= 8:
+        return None
+
+    return s
+
 
 def flatten_song(song, old_row=None, source="top200_fast_update"):
     metadata = song.get("metadata") or {}
@@ -189,17 +210,17 @@ def flatten_song(song, old_row=None, source="top200_fast_update"):
 
         # 상세 페이지에서 가져올 수 있는 가사/프롬프트 후보
         "lyrics": (
-            song.get("lyrics")
-            or metadata.get("lyrics")
-            or metadata.get("lyric")
+            clean_text_field(song.get("lyrics"))
+            or clean_text_field(metadata.get("lyrics"))
+            or clean_text_field(metadata.get("lyric"))
         ),
         "prompt": (
-            song.get("prompt")
-            or metadata.get("prompt")
+            clean_text_field(song.get("prompt"))
+            or clean_text_field(metadata.get("prompt"))
         ),
         "gpt_description_prompt": (
-            song.get("gpt_description_prompt")
-            or metadata.get("gpt_description_prompt")
+            clean_text_field(song.get("gpt_description_prompt"))
+            or clean_text_field(metadata.get("gpt_description_prompt"))
         ),
 
         "song_url": f"https://suno.com/song/{song_id}" if song_id else None,
