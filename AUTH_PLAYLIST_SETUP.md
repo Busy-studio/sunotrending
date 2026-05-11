@@ -1,67 +1,42 @@
-# Suno Chart v1.05 Auth / Playlist Setup
+# Suno Chart v1.05.3 Auth Stable 설정
 
-## What changed
+이 버전은 v1.04.3의 차트 렌더링 구조를 유지하면서 Google 로그인, 로그인 사용자 수동 곡 추가, 개인 플레이리스트 저장 기반을 추가합니다.
 
-v1.05 adds Google/OIDC login and logged-in user features:
-
-- Logged-in users can submit manual Suno song collection requests.
-- Logged-in users can create one or more saved playlists.
-- Playlists are stored per user on the `data` branch as JSON files under `data/user_playlists/`.
-- Playlists already include a `visibility` field (`private` / `public`) so public sharing can be expanded later.
-
-## Required Streamlit version
-
-`requirements.txt` now uses:
-
-```txt
-streamlit>=1.42.0
-Authlib>=1.3.2
-```
-
-## Required secrets
-
-Add these to Streamlit Cloud Secrets or local `.streamlit/secrets.toml`.
-Use `.streamlit/secrets.example.toml` as a template.
+## Streamlit Secrets 예시
 
 ```toml
-DATA_ZIP_PASSWORD = "..."
-DATA_RAW_BASE_URL = "https://raw.githubusercontent.com/Busy-studio/sunotrending/data/data"
-GITHUB_ACTION_TOKEN = "..."
-APP_PUBLIC_BASE_URL = "https://your-streamlit-app-url"
+DATA_ZIP_PASSWORD = "기존 ZIP 비밀번호"
+GITHUB_ACTION_TOKEN = "github_pat_..."
+
+GITHUB_REPO_OWNER = "Busy-studio"
+GITHUB_REPO_NAME = "sunotrending"
+APP_PUBLIC_BASE_URL = "https://sunotrending.streamlit.app"
 
 [auth]
-redirect_uri = "https://your-streamlit-app-url/oauth2callback"
-cookie_secret = "a-long-random-secret"
+redirect_uri = "https://sunotrending.streamlit.app/oauth2callback"
+cookie_secret = "직접 생성한 긴 랜덤 문자열"
 
 [auth.google]
-client_id = "..."
-client_secret = "..."
+client_id = "Google Cloud에서 받은 Client ID"
+client_secret = "Google Cloud에서 받은 Client Secret"
 server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
 ```
 
-## Google OAuth setup
+## Google Cloud OAuth
 
-In Google Cloud Console, create an OAuth client for a web application and add this redirect URI:
+- Application type: Web application
+- Authorized redirect URI: `https://sunotrending.streamlit.app/oauth2callback`
+- Authorized JavaScript origin: `https://sunotrending.streamlit.app`
 
-```txt
-https://your-streamlit-app-url/oauth2callback
+## cookie_secret 생성
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-For local testing, also add:
+## 기능
 
-```txt
-http://localhost:8501/oauth2callback
-```
-
-## GitHub token permissions
-
-`GITHUB_ACTION_TOKEN` needs repository Contents read/write permission because the app writes:
-
-- `data/manual_song_queue.csv`
-- `data/user_playlists/<user_key>.json`
-
-## Current limitation
-
-The existing HTML audio player playlist is still a browser-side runtime playlist.
-The saved playlist feature is server-side and lets users create playlists and add songs from the current payload charts.
-A later version can wire the HTML player's current queue directly into saved playlists using a custom Streamlit component bridge.
+- 비로그인: 차트 보기/재생 가능
+- 로그인: 수동 곡 추가 가능
+- 로그인: 개인 플레이리스트 JSON 저장 가능
+- 공개 플레이리스트 확장을 위해 `visibility = private/public` 필드 포함
