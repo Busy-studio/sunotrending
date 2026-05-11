@@ -7,20 +7,55 @@ DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
 TOP_N = int(os.getenv("RANK_MOVEMENT_TOP_N", "200"))
 
+RANK_COLS = [
+    "previous_rank", "current_rank", "rank_change", "rank_status",
+    "current_score", "base_score", "growth_score", "freshness_score",
+    "best_rank", "best_trend_score", "best_score_at",
+    "peak_play_count", "peak_upvote_count", "peak_comment_count", "peak_adjusted_comment_count",
+]
 
-def load_db():
+
+def dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Protect against exact duplicate column labels created by older rank merges."""
+    if df.columns.duplicated().any():
+        dupes = df.columns[df.columns.duplicated(keep=False)].tolist()
+        print(f"[rank_movement] duplicate columns found, keeping last values: {dupes}")
+        df = df.loc[:, ~df.columns.duplicated(keep="last")].copy()
+    return df
+
+
+def series_col(df: pd.DataFrame, col: str, default=pd.NA) -> pd.Series:
+    """Return one Series even if a DataFrame has duplicate column names."""
+    if col not in df.columns:
+        return pd.Series([default] * len(df), index=df.index)
+    value = df[col]
+    if isinstance(value, pd.DataFrame):
+        return value.iloc[:, -1]
+    return value
+
+
+def numeric_col(df: pd.DataFrame, col: str) -> pd.Series:
+    return pd.to_numeric(series_col(df, col), errors="coerce")
+
+
+def load_db() -> pd.DataFrame:
     if not os.path.exists(DB_PATH):
         raise FileNotFoundError(f"Missing {DB_PATH}")
     db = pd.read_csv(DB_PATH)
+    db = dedupe_columns(db)
     if "id" not in db.columns:
         raise RuntimeError("DB must contain id column")
-    return prepare_db(db)
+    db = prepare_db(db)
+    db = dedupe_columns(db)
+    return db
 
 
-def load_history():
+def load_history() -> pd.DataFrame:
     if not os.path.exists(HISTORY_PATH):
         return pd.DataFrame()
-    return prepare_history(pd.read_csv(HISTORY_PATH))
+    hist = pd.read_csv(HISTORY_PATH)
+    hist = dedupe_columns(hist)
+    return prepare_history(hist)
 
 
 def main():
@@ -34,12 +69,12 @@ def main():
     has_previous_rank_data = False
 
     if "current_rank" in db.columns:
-        old_rank_df = db[["id", "current_rank"]].copy()
-        old_rank_df["current_rank"] = pd.to_numeric(old_rank_df["current_rank"], errors="coerce")
-        has_previous_rank_data = old_rank_df["current_rank"].notna().any()
-        old_current = dict(zip(old_rank_df["id"].astype(str), old_rank_df["current_rank"]))
+        current_rank_series = numeric_col(db, "current_rank")
+        has_previous_rank_data = current_rank_series.notna().any()
+        old_current = dict(zip(series_col(db, "id").astype(str), current_rank_series))
 
     scored = score_songs(db, hist)
+    scored = dedupe_columns(scored)
     ranked = filter_active(scored).sort_values("trend_score", ascending=False, na_position="last").head(TOP_N).copy()
     ranked = ranked.reset_index(drop=True)
     ranked["new_current_rank"] = range(1, len(ranked) + 1)
@@ -59,46 +94,30 @@ def main():
         return "down"
 
     ranked["rank_status_new"] = ranked.apply(get_rank_status, axis=1)
-    ranked["current_score_new"] = ranked["trend_score"]
-    ranked["base_score_new"] = ranked["base_score"]
-    ranked["growth_score_new"] = ranked["growth_score"]
-    ranked["freshness_score_new"] = ranked["freshness_score"]
-    ranked["peak_play_count_new"] = ranked["play_count"]
-    ranked["peak_upvote_count_new"] = ranked["upvote_count"]
-    ranked["peak_comment_count_new"] = ranked["comment_count"]
-    ranked["peak_adjusted_comment_count_new"] = ranked["effective_comment_count"]
 
-    db = db.drop(
-        columns=[
-            "previous_rank", "current_rank", "rank_change", "rank_status",
-            "current_score", "base_score", "growth_score", "freshness_score",
-        ],
-        errors="ignore",
-    )
+    # Remove old rank/score columns before merging the new clean result.
+    db = db.drop(columns=[c for c in RANK_COLS if c in db.columns], errors="ignore")
+    db = dedupe_columns(db)
 
-    # Build a clean update frame explicitly.
-    # Do not use rename(...)[merge_cols] here: ranked already contains old columns
-    # such as current_rank/previous_rank from db, and renaming new_current_rank to
-    # current_rank can create duplicate column names. With duplicate names,
-    # db["current_rank"] returns a DataFrame instead of a Series and pandas
-    # to_numeric() fails with: TypeError: arg must be a list, tuple, 1-d array, or Series.
     rank_updates = pd.DataFrame({
         "id": ranked["id"].astype(str),
         "current_rank": ranked["new_current_rank"],
         "previous_rank": ranked["previous_rank_new"],
         "rank_change": ranked["rank_change_new"],
         "rank_status": ranked["rank_status_new"],
-        "current_score": ranked["current_score_new"],
-        "base_score": ranked["base_score_new"],
-        "growth_score": ranked["growth_score_new"],
-        "freshness_score": ranked["freshness_score_new"],
-        "peak_play_count_new": ranked["peak_play_count_new"],
-        "peak_upvote_count_new": ranked["peak_upvote_count_new"],
-        "peak_comment_count_new": ranked["peak_comment_count_new"],
-        "peak_adjusted_comment_count_new": ranked["peak_adjusted_comment_count_new"],
+        "current_score": ranked["trend_score"],
+        "base_score": ranked["base_score"],
+        "growth_score": ranked["growth_score"],
+        "freshness_score": ranked["freshness_score"],
+        "peak_play_count_new": ranked["play_count"],
+        "peak_upvote_count_new": ranked["upvote_count"],
+        "peak_comment_count_new": ranked["comment_count"],
+        "peak_adjusted_comment_count_new": ranked["effective_comment_count"],
     })
 
-    db = db.merge(rank_updates, on="id", how="left")
+    db["id"] = db["id"].astype(str)
+    db = db.merge(rank_updates, on="id", how="left", validate="one_to_one")
+    db = dedupe_columns(db)
 
     now_text = pd.Timestamp.now(tz="UTC").isoformat()
 
@@ -110,12 +129,12 @@ def main():
             db[col] = pd.NA
 
     db["best_rank"] = pd.concat([
-        pd.to_numeric(db["best_rank"], errors="coerce"),
-        pd.to_numeric(db["current_rank"], errors="coerce"),
+        numeric_col(db, "best_rank"),
+        numeric_col(db, "current_rank"),
     ], axis=1).min(axis=1, skipna=True)
 
-    old_best_score = pd.to_numeric(db["best_trend_score"], errors="coerce")
-    current_score = pd.to_numeric(db["current_score"], errors="coerce")
+    old_best_score = numeric_col(db, "best_trend_score")
+    current_score = numeric_col(db, "current_score")
     improved_mask = current_score.notna() & (old_best_score.isna() | (current_score > old_best_score))
     db["best_trend_score"] = pd.concat([old_best_score, current_score], axis=1).max(axis=1, skipna=True)
     db.loc[improved_mask, "best_score_at"] = now_text
@@ -127,8 +146,8 @@ def main():
         ("peak_adjusted_comment_count", "peak_adjusted_comment_count_new"),
     ]:
         db[peak_col] = pd.concat([
-            pd.to_numeric(db[peak_col], errors="coerce"),
-            pd.to_numeric(db[new_col], errors="coerce"),
+            numeric_col(db, peak_col),
+            numeric_col(db, new_col),
         ], axis=1).max(axis=1, skipna=True)
 
     db = db.drop(
@@ -138,6 +157,7 @@ def main():
         ],
         errors="ignore",
     )
+    db = dedupe_columns(db)
 
     db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
     print(f"[rank_movement] saved db_rows={len(db)} -> {DB_PATH}")

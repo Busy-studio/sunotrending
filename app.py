@@ -577,12 +577,48 @@ def payload_to_df(songs):
     return df
 
 
-def render_player_ranking_payload(songs, histories=None):
-    songs = songs or []
+def clean_payload_text(value):
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return fix_mojibake(value).strip()
+
+
+def normalize_payload_song(song):
+    if not isinstance(song, dict):
+        return song
+
+    # payload 경로에서는 CSV 전처리 단계를 건너뛰므로, 화면에 노출되는 텍스트를 한 번 더 복구한다.
+    text_keys = [
+        "title", "creator", "handle", "user_id", "created_at", "style_tags",
+        "song_url", "audio_url", "image_url", "lyrics", "rank_status", "outlier_reasons",
+    ]
+    for key in text_keys:
+        if key in song:
+            song[key] = clean_payload_text(song.get(key))
+
+    return song
+
+
+def normalize_payload_songs(songs):
+    return [normalize_payload_song(dict(song)) for song in (songs or []) if isinstance(song, dict)]
+
+
+def render_player_ranking_payload(songs, histories=None, title="Top 200 Trending", subtitle=None):
+    songs = normalize_payload_songs(songs)
     histories = histories or {}
+
+    title = clean_payload_text(title) or "Suno Songs"
+    subtitle = clean_payload_text(subtitle) or "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다."
 
     songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
     histories_json = json.dumps(histories, ensure_ascii=False).replace("</", "<\\/")
+    title_html = html.escape(title)
+    subtitle_html = html.escape(subtitle)
 
     ranking_config = {
         "play_weight": PLAY_WEIGHT,
@@ -1896,8 +1932,8 @@ def render_player_ranking_html(songs_json, histories_json, ranking_config_json):
         <main class="ranking-panel">
             <div class="ranking-topbar">
                 <div>
-                    <div class="ranking-title">Top 200 Trending</div>
-                    <div class="ranking-sub">앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다.</div>
+                    <div class="ranking-title">{title_html}</div>
+                    <div class="ranking-sub">{subtitle_html}</div>
                 </div>
                 <input class="search-input" id="searchInput" placeholder="Search title / style / creator / handle">
             </div>
@@ -3066,29 +3102,31 @@ if payload:
 
     def get_tab_payload(key):
         tab = tabs_payload.get(key, {})
-        return tab.get("songs", []) or [], tab.get("histories", {}) or {}, tab.get("description", "")
+        title = tab.get("title", key)
+        description = tab.get("description", "")
+        return tab.get("songs", []) or [], tab.get("histories", {}) or {}, title, description
 
     with new_tab:
-        songs, histories, description = get_tab_payload("new_songs")
+        songs, histories, tab_title, description = get_tab_payload("new_songs")
         st.caption(description or "생성일 기준 최신순")
         if songs:
-            render_player_ranking_payload(songs, histories)
+            render_player_ranking_payload(songs, histories, title=tab_title or "New Song", subtitle=description)
         else:
             st.info("New Song 표시 데이터가 없습니다.")
 
     with top_tab:
-        songs, histories, description = get_tab_payload("top200")
+        songs, histories, tab_title, description = get_tab_payload("top200")
         st.caption(description or "최근 4일 이내 곡 중 trend_score 상위 200")
         if songs:
-            render_player_ranking_payload(songs, histories)
+            render_player_ranking_payload(songs, histories, title=tab_title or "Top 200", subtitle=description)
         else:
             st.info("Top 200 표시 데이터가 없습니다.")
 
     with crew_tab:
-        songs, histories, description = get_tab_payload("rain_crew")
+        songs, histories, tab_title, description = get_tab_payload("rain_crew")
         st.caption(description or "Rain Crew 설정에 포함된 크리에이터 곡 최신순")
         if songs:
-            render_player_ranking_payload(songs, histories)
+            render_player_ranking_payload(songs, histories, title=tab_title or "Rain Crew", subtitle=description)
         else:
             st.info("Rain Crew 표시 데이터가 없습니다. config/rain_crew.json에 handle 또는 user_id를 추가하세요.")
 

@@ -5,6 +5,11 @@ from typing import Any
 
 import pandas as pd
 
+try:
+    import ftfy
+except Exception:
+    ftfy = None
+
 from ranking_core import (
     PLAY_WEIGHT, LIKE_WEIGHT, COMMENT_WEIGHT, GROWTH_WEIGHT, FRESHNESS_WEIGHT,
     FRESHNESS_POWER, GROWTH_WINDOW_HOURS, MAX_AGE_DAYS,
@@ -25,6 +30,84 @@ OUTLIER_SIGMA = float(os.getenv("OUTLIER_SIGMA", "6.0"))
 OUTLIER_USE_LOG = os.getenv("OUTLIER_USE_LOG", "true").lower() in {"1", "true", "yes", "y"}
 
 
+def broken_score(s: str) -> int:
+    if not s:
+        return 999999
+
+    bad_markers = [
+        "Ã", "ã", "Â", "â", "ð", "Ð", "Ñ", "Î", "Ï",
+        "Å", "¤", "¦", "§", "¨", "©", "ª", "«", "¬", "®", "¯", "°", "±", "²", "³",
+    ]
+    score = sum(s.count(ch) * 3 for ch in bad_markers)
+    score += sum(5 for ch in s if 0x80 <= ord(ch) <= 0x9F)
+    score += max(0, 8 - len(s))
+    return score
+
+
+def try_decode_utf8_from_latinish(s: str) -> list[str]:
+    candidates = []
+    for enc in ["latin1", "cp1252"]:
+        try:
+            fixed = s.encode(enc, errors="strict").decode("utf-8", errors="strict")
+            if fixed:
+                candidates.append(fixed)
+        except Exception:
+            pass
+        try:
+            fixed = s.encode(enc, errors="ignore").decode("utf-8", errors="ignore")
+            if fixed:
+                candidates.append(fixed)
+        except Exception:
+            pass
+    return candidates
+
+
+def fix_mojibake(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+
+    original = str(value)
+    if not original:
+        return ""
+
+    candidates = [original]
+
+    if ftfy is not None:
+        try:
+            fixed = ftfy.fix_text(original)
+            if fixed and fixed not in candidates:
+                candidates.append(fixed)
+        except Exception:
+            pass
+
+    frontier = list(candidates)
+    for _ in range(3):
+        new_frontier = []
+        for item in frontier:
+            for fixed in try_decode_utf8_from_latinish(item):
+                if fixed and fixed not in candidates:
+                    candidates.append(fixed)
+                    new_frontier.append(fixed)
+            if ftfy is not None:
+                try:
+                    fixed = ftfy.fix_text(item)
+                    if fixed and fixed not in candidates:
+                        candidates.append(fixed)
+                        new_frontier.append(fixed)
+                except Exception:
+                    pass
+        frontier = new_frontier
+        if not frontier:
+            break
+
+    return min(candidates, key=broken_score)
+
+
 def clean_text(value: Any) -> str:
     if value is None:
         return ""
@@ -33,8 +116,8 @@ def clean_text(value: Any) -> str:
             return ""
     except Exception:
         pass
-    s = str(value).strip()
-    if s.lower() in {"nan", "none", "null", "<na>"}:
+    s = fix_mojibake(value).strip()
+    if s.lower() in {"", "nan", "none", "null", "<na>", "-"}:
         return ""
     return s
 
@@ -218,9 +301,10 @@ def with_rank(df: pd.DataFrame, start: int = 1) -> pd.DataFrame:
     return df
 
 
-def make_tab(df: pd.DataFrame, hist: pd.DataFrame, description: str) -> dict[str, Any]:
+def make_tab(df: pd.DataFrame, hist: pd.DataFrame, title: str, description: str) -> dict[str, Any]:
     songs = build_song_payload(df)
     return {
+        "title": title,
         "description": description,
         "count": len(songs),
         "songs": songs,
@@ -277,9 +361,9 @@ def main() -> None:
             },
         },
         "tabs": {
-            "new_songs": make_tab(new_songs_df, hist, "생성일 기준 최신순"),
-            "top200": make_tab(top200_df, hist, "최근 4일 이내 곡 중 trend_score 상위 200"),
-            "rain_crew": make_tab(rain_crew_df, hist, "Rain Crew 설정에 포함된 크리에이터 곡 최신순"),
+            "new_songs": make_tab(new_songs_df, hist, "New Song", "생성일 기준 최신순"),
+            "top200": make_tab(top200_df, hist, "Top 200", "최근 4일 이내 곡 중 trend_score 상위 200"),
+            "rain_crew": make_tab(rain_crew_df, hist, "Rain Crew", "Rain Crew 설정에 포함된 크리에이터 곡 최신순"),
         },
     }
 
