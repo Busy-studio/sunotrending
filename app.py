@@ -7,7 +7,6 @@ import requests
 import base64
 import uuid
 import hashlib
-from datetime import datetime, timezone
 from io import StringIO
 import pandas as pd
 import streamlit as st
@@ -67,16 +66,6 @@ MANUAL_QUEUE_PATH = st.secrets.get(
     "MANUAL_QUEUE_PATH",
     os.getenv("MANUAL_QUEUE_PATH", "data/manual_song_queue.csv"),
 )
-
-USER_PLAYLISTS_BASE_PATH = st.secrets.get(
-    "USER_PLAYLISTS_BASE_PATH",
-    os.getenv("USER_PLAYLISTS_BASE_PATH", "data/user_playlists"),
-).strip("/")
-
-APP_PUBLIC_BASE_URL = st.secrets.get(
-    "APP_PUBLIC_BASE_URL",
-    os.getenv("APP_PUBLIC_BASE_URL", ""),
-).rstrip("/")
 
 RETENTION_HOURS = 96  # 4일
 TOP_N = 200
@@ -348,419 +337,6 @@ def sync_remote_data_files(raw_base_url, github_token=""):
         "downloaded": downloaded,
     }
 
-
-# ================================
-# Auth + user helpers
-# ================================
-
-def is_auth_configured():
-    """Google OIDC 설정이 실제값처럼 보일 때만 True.
-
-    설정이 없거나 placeholder여도 차트는 계속 렌더링되도록 하기 위한 안전장치다.
-    """
-    try:
-        auth_cfg = st.secrets.get("auth", {})
-        google_cfg = auth_cfg.get("google", {}) if hasattr(auth_cfg, "get") else {}
-
-        redirect_uri = str(auth_cfg.get("redirect_uri", "")).strip() if hasattr(auth_cfg, "get") else ""
-        cookie_secret = str(auth_cfg.get("cookie_secret", "")).strip() if hasattr(auth_cfg, "get") else ""
-        client_id = str(google_cfg.get("client_id", "")).strip() if hasattr(google_cfg, "get") else ""
-        client_secret = str(google_cfg.get("client_secret", "")).strip() if hasattr(google_cfg, "get") else ""
-
-        values = [redirect_uri, cookie_secret, client_id, client_secret]
-        if not all(values):
-            return False
-
-        bad_fragments = [
-            "...",
-            "xxxx",
-            "직접_",
-            "python으로_",
-            "GOOGLE_CLIENT",
-            "실제_",
-            "YOUR_",
-        ]
-        return not any(any(fragment in value for fragment in bad_fragments) for value in values)
-    except Exception:
-        return False
-
-
-def auth_login_available():
-    return is_auth_configured() and hasattr(st, "login") and hasattr(st, "logout")
-
-
-def user_key_from_email(email):
-    raw = str(email or "").strip().lower()
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
-
-
-def email_hash(email):
-    raw = str(email or "").strip().lower()
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def get_current_user():
-    try:
-        user = getattr(st, "user", None)
-        if not user:
-            return None
-
-        try:
-            is_logged_in = bool(user.is_logged_in)
-        except Exception:
-            try:
-                is_logged_in = bool(user.get("is_logged_in"))
-            except Exception:
-                is_logged_in = False
-
-        if not is_logged_in:
-            return None
-
-        def user_get(key, default=""):
-            try:
-                return getattr(user, key) or default
-            except Exception:
-                try:
-                    return user.get(key, default) or default
-                except Exception:
-                    return default
-
-        email = str(user_get("email", "")).strip().lower()
-        name = str(user_get("name", "")).strip()
-        picture = str(user_get("picture", "")).strip()
-
-        if not email:
-            email = str(user_get("sub", "")).strip().lower()
-
-        if not email:
-            return None
-
-        return {
-            "email": email,
-            "name": name or email.split("@")[0],
-            "picture": picture,
-            "user_key": user_key_from_email(email),
-            "email_hash": email_hash(email),
-        }
-    except Exception:
-        return None
-
-
-def render_auth_box(current_user):
-    with st.sidebar:
-        st.markdown("### Account")
-
-        if current_user:
-            st.success(f"Google 로그인됨: {current_user.get('name')}")
-            st.caption(current_user.get("email", ""))
-            if auth_login_available() and st.button("로그아웃", use_container_width=True):
-                try:
-                    st.logout()
-                except Exception as e:
-                    st.warning(f"로그아웃을 실행할 수 없습니다: {e}")
-            return
-
-        if not auth_login_available():
-            st.info("Google 로그인 설정 대기중입니다. 차트는 계속 사용할 수 있습니다.")
-            st.caption("Streamlit Secrets의 [auth] / [auth.google] 실제값을 넣으면 로그인 버튼이 활성화됩니다.")
-            return
-
-        st.info("Google 로그인하면 수동 곡 추가와 개인 플레이리스트 저장을 사용할 수 있습니다.")
-        if st.button("Google로 로그인", use_container_width=True):
-            try:
-                st.login("google")
-            except Exception as e:
-                st.error(f"Google 로그인을 시작하지 못했습니다: {e}")
-
-
-def github_headers():
-    if not GITHUB_ACTION_TOKEN:
-        return None
-    return {
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {GITHUB_ACTION_TOKEN}",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-
-def github_contents_url(path):
-    clean_path = str(path).strip().lstrip("/")
-    return (
-        f"https://api.github.com/repos/"
-        f"{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
-        f"/contents/{clean_path}"
-    )
-
-
-def github_read_text_file(path, branch=MANUAL_QUEUE_BRANCH):
-    headers = github_headers()
-    if not headers:
-        return None, None, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
-
-    response = requests.get(
-        github_contents_url(path),
-        headers=headers,
-        params={"ref": branch},
-        timeout=20,
-    )
-
-    if response.status_code == 404:
-        return "", None, ""
-    if response.status_code != 200:
-        return None, None, f"GitHub 파일 읽기 실패: {response.status_code} / {response.text[:300]}"
-
-    payload = response.json()
-    encoded = payload.get("content", "")
-    sha = payload.get("sha")
-    text = base64.b64decode(encoded).decode("utf-8") if encoded else ""
-    return text, sha, ""
-
-
-def github_write_text_file(path, text, message, branch=MANUAL_QUEUE_BRANCH, sha=None):
-    headers = github_headers()
-    if not headers:
-        return False, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
-
-    content_b64 = base64.b64encode(str(text).encode("utf-8")).decode("utf-8")
-    put_payload = {
-        "message": message,
-        "content": content_b64,
-        "branch": branch,
-    }
-    if sha:
-        put_payload["sha"] = sha
-
-    response = requests.put(
-        github_contents_url(path),
-        headers=headers,
-        json=put_payload,
-        timeout=25,
-    )
-
-    if response.status_code in [200, 201]:
-        return True, ""
-    if response.status_code == 409:
-        return False, "GitHub 저장 충돌이 발생했습니다. 다시 시도하세요."
-    if response.status_code == 403:
-        return False, "GitHub 저장 권한이 없습니다. 토큰에 Contents: Read and write 권한이 필요합니다."
-    return False, f"GitHub 저장 실패: {response.status_code} / {response.text[:300]}"
-
-
-def user_playlist_path(user_key):
-    return f"{USER_PLAYLISTS_BASE_PATH}/{user_key}.json"
-
-
-def empty_playlist_store(current_user):
-    now = datetime.now(timezone.utc).isoformat()
-    return {
-        "version": 1,
-        "owner_user_key": current_user.get("user_key", ""),
-        "owner_display_name": current_user.get("name", ""),
-        "owner_email_hash": current_user.get("email_hash", ""),
-        "created_at": now,
-        "updated_at": now,
-        "playlists": [],
-    }
-
-
-def load_user_playlists(current_user):
-    if not current_user:
-        return None, None, "로그인이 필요합니다."
-
-    text, sha, err = github_read_text_file(user_playlist_path(current_user["user_key"]))
-    if err:
-        return None, None, err
-
-    if not text or not text.strip():
-        return empty_playlist_store(current_user), sha, ""
-
-    try:
-        store = json.loads(text)
-    except Exception:
-        store = empty_playlist_store(current_user)
-
-    if not isinstance(store.get("playlists"), list):
-        store["playlists"] = []
-
-    return store, sha, ""
-
-
-def save_user_playlists(current_user, store, sha=None):
-    if not current_user:
-        return False, "로그인이 필요합니다."
-
-    store = dict(store or {})
-    store["owner_user_key"] = current_user.get("user_key", "")
-    store["owner_display_name"] = current_user.get("name", "")
-    store["owner_email_hash"] = current_user.get("email_hash", "")
-    store["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-    text = json.dumps(store, ensure_ascii=False, indent=2)
-    return github_write_text_file(
-        user_playlist_path(current_user["user_key"]),
-        text,
-        "Update user playlists",
-        sha=sha,
-    )
-
-
-def render_user_playlist_panel(current_user, tabs_payload):
-    st.markdown("### 내 플레이리스트")
-
-    if not current_user:
-        st.info("Google 로그인 후 개인 플레이리스트 저장을 사용할 수 있습니다.")
-        return
-
-    if not GITHUB_ACTION_TOKEN:
-        st.warning("GITHUB_ACTION_TOKEN이 없어 플레이리스트를 저장할 수 없습니다.")
-        return
-
-    store, sha, err = load_user_playlists(current_user)
-    if err:
-        st.warning(err)
-        return
-
-    playlists = store.get("playlists", [])
-    now = datetime.now(timezone.utc).isoformat()
-
-    with st.form("create_playlist_form", clear_on_submit=True):
-        new_name = st.text_input("새 플레이리스트 이름", placeholder="My Playlist")
-        create = st.form_submit_button("플레이리스트 만들기")
-
-    if create:
-        playlists.append({
-            "playlist_id": f"pl_{uuid.uuid4().hex[:12]}",
-            "owner_user_key": current_user.get("user_key", ""),
-            "owner_display_name": current_user.get("name", ""),
-            "title": clean_payload_text(new_name) or "My Playlist",
-            "description": "",
-            "visibility": "private",
-            "created_at": now,
-            "updated_at": now,
-            "song_ids": [],
-        })
-        store["playlists"] = playlists
-        ok, msg = save_user_playlists(current_user, store, sha=sha)
-        if ok:
-            st.success("플레이리스트를 만들었습니다.")
-            st.rerun()
-        else:
-            st.error(msg)
-
-    if not playlists:
-        st.caption("아직 저장된 플레이리스트가 없습니다.")
-        return
-
-    # 차트 payload에서 곡 검색용 lookup 구성
-    song_lookup = {}
-    tab_options = {}
-    for key, tab in (tabs_payload or {}).items():
-        title = display_tab_label(key, tab.get("title") if isinstance(tab, dict) else "")
-        songs = normalize_payload_songs((tab or {}).get("songs", []) if isinstance(tab, dict) else [])
-        tab_options[key] = {"title": title, "songs": songs}
-        for song in songs:
-            sid = str(song.get("id", "")).strip()
-            if sid:
-                song_lookup[sid] = song
-
-    def song_label(song):
-        title = clean_payload_text(song.get("title") or song.get("id") or "Untitled")
-        handle = clean_payload_text(song.get("handle") or "")
-        return f"{title} · {handle}" if handle else title
-
-    labels = [f"{p.get('title', 'My Playlist')} ({len(p.get('song_ids', []))}곡)" for p in playlists]
-    selected_idx = st.selectbox(
-        "플레이리스트 선택",
-        list(range(len(playlists))),
-        format_func=lambda i: labels[i],
-    )
-    playlist = playlists[selected_idx]
-
-    c1, c2 = st.columns([0.7, 0.3])
-    with c1:
-        playlist["title"] = st.text_input("제목", playlist.get("title", "My Playlist")) or "My Playlist"
-        playlist["description"] = st.text_input("설명", playlist.get("description", ""))
-    with c2:
-        playlist["visibility"] = st.selectbox(
-            "공개 범위",
-            ["private", "public"],
-            index=0 if playlist.get("visibility", "private") != "public" else 1,
-            format_func=lambda x: "비공개" if x == "private" else "공개",
-        )
-        if playlist.get("visibility") == "public":
-            base = APP_PUBLIC_BASE_URL or "https://sunotrending.streamlit.app"
-            st.caption(f"공유 링크 준비: {base}?playlist={playlist.get('playlist_id')}")
-
-    if st.button("플레이리스트 정보 저장", use_container_width=True):
-        playlist["updated_at"] = now
-        playlists[selected_idx] = playlist
-        store["playlists"] = playlists
-        ok, msg = save_user_playlists(current_user, store, sha=sha)
-        if ok:
-            st.success("저장했습니다.")
-            st.rerun()
-        else:
-            st.error(msg)
-
-    st.markdown("#### 곡 추가")
-    tab_keys = [k for k, v in tab_options.items() if v.get("songs")]
-    if tab_keys:
-        source_key = st.selectbox(
-            "차트 선택",
-            tab_keys,
-            format_func=lambda k: tab_options[k]["title"],
-            key="playlist_add_source_tab",
-        )
-        source_songs = tab_options[source_key]["songs"]
-        source_song_ids = [str(song.get("id", "")).strip() for song in source_songs if str(song.get("id", "")).strip()]
-        selected_song_id = st.selectbox(
-            "추가할 곡",
-            source_song_ids,
-            format_func=lambda sid: song_label(song_lookup.get(sid, {"id": sid})),
-            key="playlist_add_song_id",
-        )
-        if st.button("선택한 곡 추가", use_container_width=True):
-            song_ids = [str(x) for x in playlist.get("song_ids", [])]
-            if selected_song_id not in song_ids:
-                song_ids.append(selected_song_id)
-                playlist["song_ids"] = song_ids
-                playlist["updated_at"] = now
-                playlists[selected_idx] = playlist
-                store["playlists"] = playlists
-                ok, msg = save_user_playlists(current_user, store, sha=sha)
-                if ok:
-                    st.success("곡을 추가했습니다.")
-                    st.rerun()
-                else:
-                    st.error(msg)
-            else:
-                st.info("이미 이 플레이리스트에 있는 곡입니다.")
-
-    song_ids = [str(x) for x in playlist.get("song_ids", [])]
-    st.markdown(f"#### 저장된 곡 {len(song_ids)}개")
-    if not song_ids:
-        st.caption("아직 저장된 곡이 없습니다.")
-    else:
-        for sid in song_ids:
-            st.write("• " + song_label(song_lookup.get(sid, {"id": sid, "title": sid})))
-        remove_sid = st.selectbox(
-            "삭제할 곡 선택",
-            song_ids,
-            format_func=lambda sid: song_label(song_lookup.get(sid, {"id": sid, "title": sid})),
-            key="playlist_remove_song_id",
-        )
-        if st.button("선택한 곡 삭제", use_container_width=True):
-            playlist["song_ids"] = [sid for sid in song_ids if sid != remove_sid]
-            playlist["updated_at"] = now
-            playlists[selected_idx] = playlist
-            store["playlists"] = playlists
-            ok, msg = save_user_playlists(current_user, store, sha=sha)
-            if ok:
-                st.success("삭제했습니다.")
-                st.rerun()
-            else:
-                st.error(msg)
-
 def is_valid_suno_link(url):
     url = str(url or "").strip()
 
@@ -790,6 +366,102 @@ def is_valid_suno_link(url):
     except Exception as e:
         return False, f"링크 확인 중 오류: {e}"
 
+
+
+# ================================
+# Auth helpers
+# ================================
+
+def secret_value(path, default=""):
+    try:
+        cur = st.secrets
+        for part in path.split("."):
+            if hasattr(cur, "get"):
+                cur = cur.get(part, {})
+            else:
+                cur = cur[part]
+        if cur is None or isinstance(cur, dict):
+            return default
+        return str(cur)
+    except Exception:
+        return default
+
+
+def looks_like_placeholder(value):
+    s = str(value or "").strip()
+    if not s:
+        return True
+    lowered = s.lower()
+    bad_bits = [
+        "...", "xxxx", "your_", "직접_", "랜덤", "python으로", "google_client", "client_secret",
+    ]
+    return any(bit in lowered for bit in bad_bits)
+
+
+def auth_login_available():
+    redirect_uri = secret_value("auth.redirect_uri")
+    cookie_secret = secret_value("auth.cookie_secret")
+    client_id = secret_value("auth.google.client_id")
+    client_secret = secret_value("auth.google.client_secret")
+    metadata_url = secret_value("auth.google.server_metadata_url")
+
+    required = [redirect_uri, cookie_secret, client_id, client_secret, metadata_url]
+    return all(not looks_like_placeholder(x) for x in required) and hasattr(st, "login") and hasattr(st, "logout")
+
+
+def get_current_user():
+    try:
+        user = getattr(st, "user", None)
+        if not user:
+            return None
+
+        is_logged_in = bool(getattr(user, "is_logged_in", False))
+        if not is_logged_in:
+            return None
+
+        email = str(getattr(user, "email", "") or "").strip().lower()
+        name = str(getattr(user, "name", "") or "").strip()
+        picture = str(getattr(user, "picture", "") or "").strip()
+
+        if not email:
+            return None
+
+        email_hash = hashlib.sha256(email.encode("utf-8")).hexdigest()
+        user_key = email_hash[:16]
+
+        return {
+            "email": email,
+            "email_hash": email_hash,
+            "user_key": user_key,
+            "name": name or email.split("@")[0],
+            "picture": picture,
+        }
+    except Exception:
+        return None
+
+
+def render_account_sidebar(current_user):
+    with st.sidebar:
+        st.markdown("### Account")
+
+        if current_user:
+            st.success(f"로그인됨: {current_user.get('name', '')}")
+            st.caption(current_user.get("email", ""))
+            if st.button("로그아웃", use_container_width=True):
+                try:
+                    st.logout()
+                except Exception as e:
+                    st.error(f"로그아웃 실패: {e}")
+            return
+
+        if auth_login_available():
+            if st.button("Google로 로그인", use_container_width=True):
+                try:
+                    st.login("google")
+                except Exception as e:
+                    st.error(f"Google 로그인을 시작하지 못했습니다: {e}")
+        else:
+            st.info("Google 로그인 설정 대기중입니다. 차트는 계속 사용할 수 있습니다.")
 
 def queue_manual_song_url(song_url, current_user=None):
     if not GITHUB_ACTION_TOKEN:
@@ -3846,11 +3518,11 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.05.3 Auth Stable")
-st.caption("v1.04.3 차트 렌더링 구조를 유지하고, Google 로그인/개인 플레이리스트 기능을 최소 침습으로 추가했습니다.")
+st.title("Suno Chart v1.05.4 Auth Stable")
+st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
 
 current_user = get_current_user()
-render_auth_box(current_user)
+render_account_sidebar(current_user)
 
 if st.button("데이터 새로고침"):
     st.cache_data.clear()
@@ -3930,7 +3602,7 @@ if payload:
                 else:
                     st.info("Google 로그인 설정이 완료되면 수동 곡 추가를 사용할 수 있습니다.")
             else:
-                st.caption(f"요청자: {current_user.get('name')} · 로그인 사용자만 queue에 추가할 수 있습니다.")
+                st.caption(f"요청자: {current_user.get('name', '')} · 로그인 사용자만 queue에 추가할 수 있습니다.")
                 with st.form("manual_add_song_form", clear_on_submit=True):
                     manual_suno_url = st.text_input(
                         "Suno song link",
@@ -3976,12 +3648,6 @@ if payload:
             default_key="top200" if "top200" in tabs_order else tabs_order[0],
             widget_key="payload_chart_view_selector",
         )
-
-    with st.expander("내 플레이리스트", expanded=False):
-        try:
-            render_user_playlist_panel(current_user, tabs_payload)
-        except Exception as e:
-            st.warning(f"플레이리스트 패널을 표시하지 못했습니다: {e}")
 
     st.stop()
 
@@ -4076,9 +3742,3 @@ render_selected_payload_tab(
     default_key="top200",
     widget_key="fallback_chart_view_selector",
 )
-
-with st.expander("내 플레이리스트", expanded=False):
-    try:
-        render_user_playlist_panel(current_user, fallback_tabs)
-    except Exception as e:
-        st.warning(f"플레이리스트 패널을 표시하지 못했습니다: {e}")
