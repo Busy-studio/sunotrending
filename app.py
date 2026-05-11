@@ -616,11 +616,25 @@ def collect_payload_song_lookup(tabs_payload):
     return lookup, tab_options
 
 
+def _safe_count(value):
+    try:
+        if value is None or pd.isna(value):
+            return 0
+        return int(float(value))
+    except Exception:
+        return 0
+
+
 def song_label(song):
+    song = song or {}
     title = clean_payload_text(song.get("title", "Untitled")) or "Untitled"
     handle = clean_payload_text(song.get("handle", ""))
     created = clean_payload_text(song.get("created_at", ""))
-    stats = f"P{int(song.get('play_count', 0) or 0):,} / L{int(song.get('upvote_count', 0) or 0):,} / C{int(song.get('comment_count', 0) or 0):,}"
+    stats = (
+        f"P{_safe_count(song.get('play_count', 0)):,} / "
+        f"L{_safe_count(song.get('upvote_count', 0)):,} / "
+        f"C{_safe_count(song.get('comment_count', 0)):,}"
+    )
     suffix = " · ".join(x for x in [handle, created, stats] if x)
     return f"{title} — {suffix}" if suffix else title
 
@@ -3887,8 +3901,8 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.05 Auth")
-st.caption("Actions payload 기반 차트 + Google 로그인 사용자 기능을 제공합니다.")
+st.title("Suno Chart v1.05.1 Auth")
+st.caption("Actions payload 기반 차트 + Google 로그인 사용자 기능을 제공합니다. 차트 렌더링을 우선합니다.")
 
 current_user = get_current_user()
 render_auth_box(current_user)
@@ -3997,8 +4011,8 @@ if payload:
                         else:
                             st.error(msg)
 
-    render_user_playlist_panel(current_user, tabs_payload)
-
+    # v1.05.1: 차트는 로그인/플레이리스트 기능보다 먼저 렌더링한다.
+    # GitHub token, 사용자 playlist JSON, auth 설정에 문제가 있어도 Top 200 자체가 가려지지 않게 한다.
     st.divider()
 
     tabs_order = payload.get("tabs_order") or ["new_songs", "top200", "rain_crew"]
@@ -4007,15 +4021,18 @@ if payload:
     if not tabs_order:
         st.info("표시할 탭 payload가 없습니다.")
     else:
-        # v1.04.3: 선택 처리는 Streamlit에서 안정적으로 하고,
-        # selector는 왼쪽 플레이어 영역을 침범하지 않도록 오른쪽 랭킹 패널 위에만 표시한다.
-        # 선택된 차트의 제목/설명은 기존 ranking 컴포넌트의 title/subtitle 자리에 표시된다.
         render_selected_payload_tab(
             tabs_payload,
             tabs_order=tabs_order,
             default_key="top200" if "top200" in tabs_order else tabs_order[0],
             widget_key="payload_chart_view_selector",
         )
+
+    with st.expander("내 플레이리스트", expanded=False):
+        try:
+            render_user_playlist_panel(current_user, tabs_payload)
+        except Exception as e:
+            st.warning(f"플레이리스트 패널을 표시하지 못했습니다: {e}")
 
     st.stop()
 
