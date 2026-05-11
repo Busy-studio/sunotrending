@@ -17,7 +17,6 @@ name: Update Suno Song Stats
         type: string
 
   schedule:
-    # Full update every 15 minutes
     - cron: "*/15 * * * *"
 
 concurrency:
@@ -70,26 +69,20 @@ jobs:
           if git show-ref --verify --quiet refs/remotes/origin/data; then
             echo "[data branch] Found origin/data. Loading latest data files."
 
-            if git cat-file -e origin/data:data/suno_song_db.zip 2>/dev/null; then
-              git show origin/data:data/suno_song_db.zip > data/suno_song_db.zip
-              echo "[data branch] Loaded data/suno_song_db.zip"
-            else
-              echo "[data branch] data/suno_song_db.zip not found. Keeping existing file."
-            fi
-
-            if git cat-file -e origin/data:data/suno_song_history.zip 2>/dev/null; then
-              git show origin/data:data/suno_song_history.zip > data/suno_song_history.zip
-              echo "[data branch] Loaded data/suno_song_history.zip"
-            else
-              echo "[data branch] data/suno_song_history.zip not found. Keeping existing file."
-            fi
-
-            if git cat-file -e origin/data:data/manual_song_queue.csv 2>/dev/null; then
-              git show origin/data:data/manual_song_queue.csv > data/manual_song_queue.csv
-              echo "[data branch] Loaded data/manual_song_queue.csv"
-            else
-              echo "[data branch] data/manual_song_queue.csv not found. Starting without queue."
-            fi
+            for file in \
+              suno_song_db.zip \
+              suno_song_history.zip \
+              suno_song_archive.zip \
+              suno_app_payload.zip \
+              manual_song_queue.csv
+            do
+              if git cat-file -e origin/data:data/$file 2>/dev/null; then
+                git show origin/data:data/$file > data/$file
+                echo "[data branch] Loaded data/$file"
+              else
+                echo "[data branch] data/$file not found. Skipping."
+              fi
+            done
           else
             echo "[data branch] origin/data not found. Using files from main branch."
           fi
@@ -115,6 +108,7 @@ jobs:
           for path in [
               "data/suno_song_db.csv",
               "data/suno_song_history.csv",
+              "data/suno_song_archive.csv",
               "data/manual_song_queue.csv",
           ]:
               print(f"[before] {path} exists={os.path.exists(path)}")
@@ -167,6 +161,7 @@ jobs:
 
           db_path = "data/suno_song_db.csv"
           hist_path = "data/suno_song_history.csv"
+          archive_path = "data/suno_song_archive.csv"
           queue_path = "data/manual_song_queue.csv"
 
           if not os.path.exists(db_path):
@@ -176,17 +171,12 @@ jobs:
           db = pd.read_csv(db_path)
           print(f"[after] {db_path} rows={len(db)}")
 
-          if os.path.exists(hist_path):
-              hist = pd.read_csv(hist_path)
-              print(f"[after] {hist_path} rows={len(hist)}")
-          else:
-              print(f"[after] {hist_path} missing")
-
-          if os.path.exists(queue_path):
-              q = pd.read_csv(queue_path)
-              print(f"[after] {queue_path} rows={len(q)}")
-          else:
-              print(f"[after] {queue_path} missing")
+          for path in [hist_path, archive_path, queue_path]:
+              if os.path.exists(path):
+                  df = pd.read_csv(path)
+                  print(f"[after] {path} rows={len(df)}")
+              else:
+                  print(f"[after] {path} missing")
 
           mode = "${{ steps.mode.outputs.mode }}"
 
@@ -227,12 +217,38 @@ jobs:
         run: |
           python scripts/update_rank_movement.py
 
-      - name: Validate CSV after comment quality
+      - name: Build app payload
+        env:
+          SONG_RETENTION_DAYS: "4"
+          GROWTH_WINDOW_HOURS: "3"
+          PLAY_WEIGHT: "1.0"
+          LIKE_WEIGHT: "3.0"
+          COMMENT_WEIGHT: "4.0"
+          GROWTH_WEIGHT: "1.5"
+          FRESHNESS_WEIGHT: "35.0"
+          FRESHNESS_POWER: "1.35"
+          PAYLOAD_NEW_SONGS_LIMIT: "300"
+          PAYLOAD_TOP200_LIMIT: "200"
+          PAYLOAD_RAIN_CREW_LIMIT: "300"
+          PAYLOAD_HISTORY_POINTS: "80"
         run: |
-          echo "After comment quality analysis:"
+          python scripts/build_app_payload.py
+
+          echo "After build app payload:"
+          ls -lh data || true
+
+          if [ ! -f data/suno_app_payload.json ]; then
+            echo "[ERROR] data/suno_app_payload.json was not created"
+            exit 1
+          fi
+
+      - name: Validate CSV after payload build
+        run: |
+          echo "After payload build:"
           ls -lh data || true
 
           python - <<'PY'
+          import json
           import os
           import sys
           import pandas as pd
@@ -240,6 +256,7 @@ jobs:
           db_path = "data/suno_song_db.csv"
           quality_path = "data/suno_comment_quality.csv"
           queue_path = "data/manual_song_queue.csv"
+          payload_path = "data/suno_app_payload.json"
 
           if not os.path.exists(db_path):
               print(f"[ERROR] Missing {db_path}")
@@ -255,6 +272,12 @@ jobs:
               "current_rank",
               "rank_change",
               "rank_status",
+              "current_score",
+              "base_score",
+              "growth_score",
+              "freshness_score",
+              "best_rank",
+              "best_trend_score",
           ]:
               print(f"[quality after] has_{col}={col in db.columns}")
 
@@ -285,6 +308,20 @@ jobs:
               print(f"[quality after] queue_rows={len(queue)}")
           else:
               print(f"[quality after] {queue_path} missing")
+
+          if not os.path.exists(payload_path):
+              print(f"[ERROR] Missing {payload_path}")
+              sys.exit(1)
+
+          with open(payload_path, "r", encoding="utf-8") as f:
+              payload = json.load(f)
+
+          tabs = payload.get("tabs", {})
+          print(f"[payload] tabs={list(tabs.keys())}")
+
+          for key, tab in tabs.items():
+              songs = tab.get("songs", [])
+              print(f"[payload] {key}_songs={len(songs)}")
           PY
 
       - name: Encrypt data
@@ -296,14 +333,28 @@ jobs:
       - name: Validate encrypted output changed
         run: |
           echo "After encrypt:"
-          ls -lh data/suno_song_db.zip data/suno_song_history.zip || true
+          ls -lh \
+            data/suno_song_db.zip \
+            data/suno_song_history.zip \
+            data/suno_song_archive.zip \
+            data/suno_app_payload.zip \
+            || true
+
+          if [ ! -f data/suno_app_payload.zip ]; then
+            echo "[ERROR] data/suno_app_payload.zip was not created"
+            echo "[ERROR] Check scripts/encrypt_data.py. It must encrypt data/suno_app_payload.json."
+            exit 1
+          fi
+
           git status --short
 
-      - name: Remove plain CSV files
+      - name: Remove plain CSV and JSON files
         run: |
           rm -f data/suno_song_db.csv
           rm -f data/suno_song_history.csv
+          rm -f data/suno_song_archive.csv
           rm -f data/suno_comment_quality.csv
+          rm -f data/suno_app_payload.json
 
       - name: Commit encrypted data to data branch
         run: |
@@ -314,7 +365,6 @@ jobs:
 
           rm -rf "$DATA_BRANCH_DIR"
 
-          # Retry logic for git fetch
           for attempt in 1 2 3; do
             echo "Fetch attempt $attempt/3..."
             if git fetch origin data; then
@@ -342,36 +392,35 @@ jobs:
 
           mkdir -p "$DATA_BRANCH_DIR/data"
 
-          cp data/suno_song_db.zip "$DATA_BRANCH_DIR/data/suno_song_db.zip"
-          cp data/suno_song_history.zip "$DATA_BRANCH_DIR/data/suno_song_history.zip"
-
-          if [ -f data/suno_song_archive.zip ]; then
-            cp data/suno_song_archive.zip "$DATA_BRANCH_DIR/data/suno_song_archive.zip"
-          fi
-
-          if [ -f data/suno_app_payload.zip ]; then
-            cp data/suno_app_payload.zip "$DATA_BRANCH_DIR/data/suno_app_payload.zip"
-          fi
-
-          if [ -f data/manual_song_queue.csv ]; then
-            cp data/manual_song_queue.csv "$DATA_BRANCH_DIR/data/manual_song_queue.csv"
-          fi
+          for file in \
+            suno_song_db.zip \
+            suno_song_history.zip \
+            suno_song_archive.zip \
+            suno_app_payload.zip \
+            manual_song_queue.csv
+          do
+            if [ -f data/$file ]; then
+              cp data/$file "$DATA_BRANCH_DIR/data/$file"
+              echo "[copy] data/$file"
+            else
+              echo "[copy] data/$file not found. Skipping."
+            fi
+          done
 
           cd "$DATA_BRANCH_DIR"
 
-          git add data/suno_song_db.zip data/suno_song_history.zip
-
-          if [ -f data/suno_song_archive.zip ]; then
-            git add data/suno_song_archive.zip
-          fi
-
-          if [ -f data/suno_app_payload.zip ]; then
-            git add data/suno_app_payload.zip
-          fi
-
-          if [ -f data/manual_song_queue.csv ]; then
-            git add data/manual_song_queue.csv
-          fi
+          for file in \
+            suno_song_db.zip \
+            suno_song_history.zip \
+            suno_song_archive.zip \
+            suno_app_payload.zip \
+            manual_song_queue.csv
+          do
+            if [ -f data/$file ]; then
+              git add data/$file
+              echo "[git add] data/$file"
+            fi
+          done
 
           if git diff --cached --quiet; then
             echo "No data changes to commit on data branch"
@@ -382,7 +431,6 @@ jobs:
               git commit -m "Update encrypted Suno data"
             fi
 
-            # Retry logic for git push
             for attempt in 1 2 3; do
               echo "Push attempt $attempt/3..."
               if git push origin HEAD:data; then
