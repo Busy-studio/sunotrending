@@ -6,9 +6,11 @@ DATA_DIR = "data"
 DB_CSV = os.path.join(DATA_DIR, "suno_song_db.csv")
 HISTORY_CSV = os.path.join(DATA_DIR, "suno_song_history.csv")
 ARCHIVE_CSV = os.path.join(DATA_DIR, "suno_song_archive.csv")
+APP_PAYLOAD_JSON = os.path.join(DATA_DIR, "suno_app_payload.json")
 DB_ZIP = os.path.join(DATA_DIR, "suno_song_db.zip")
 HISTORY_ZIP = os.path.join(DATA_DIR, "suno_song_history.zip")
 ARCHIVE_ZIP = os.path.join(DATA_DIR, "suno_song_archive.zip")
+APP_PAYLOAD_ZIP = os.path.join(DATA_DIR, "suno_app_payload.zip")
 
 
 def ensure_default_csvs() -> None:
@@ -58,10 +60,13 @@ def main() -> None:
     encrypt_file_to_zip(DB_CSV, DB_ZIP, password)
     encrypt_file_to_zip(HISTORY_CSV, HISTORY_ZIP, password)
     encrypt_file_to_zip(ARCHIVE_CSV, ARCHIVE_ZIP, password)
+    encrypt_file_to_zip(APP_PAYLOAD_JSON, APP_PAYLOAD_ZIP, password)
 
     print(f"Encrypted {DB_CSV} -> {DB_ZIP}")
     print(f"Encrypted {HISTORY_CSV} -> {HISTORY_ZIP}")
     print(f"Encrypted {ARCHIVE_CSV} -> {ARCHIVE_ZIP}")
+    if os.path.exists(APP_PAYLOAD_JSON):
+        print(f"Encrypted {APP_PAYLOAD_JSON} -> {APP_PAYLOAD_ZIP}")
 
 
 if __name__ == "__main__":

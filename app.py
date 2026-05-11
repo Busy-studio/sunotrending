@@ -20,6 +20,7 @@ except Exception:
 
 DB_ZIP_PATH = "data/suno_song_db.zip"
 HISTORY_ZIP_PATH = "data/suno_song_history.zip"
+APP_PAYLOAD_ZIP_PATH = "data/suno_app_payload.zip"
 DATA_DIR = "data"
 
 # data branch에서 ZIP을 받아오기 위한 설정
@@ -264,7 +265,7 @@ def build_creator_display(display_name_value, handle_value):
     return primary, secondary
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=900)
 def sync_remote_data_files(raw_base_url, github_token=""):
     if not raw_base_url:
         return {
@@ -284,38 +285,54 @@ def sync_remote_data_files(raw_base_url, github_token=""):
     if github_token:
         headers["Authorization"] = f"Bearer {github_token}"
 
-    downloaded = []
-
-    for filename in ["suno_song_db.zip", "suno_song_history.zip"]:
-        url = f"{raw_base_url}/{filename}?t={int(time.time() // 60)}"
+    def download_one(filename, required=True):
+        # GitHub Actions 주기와 맞춰 15분 단위 cache-bust.
+        url = f"{raw_base_url}/{filename}?t={int(time.time() // 900)}"
         dest_path = os.path.join(DATA_DIR, filename)
         tmp_path = dest_path + ".tmp"
 
         response = requests.get(url, headers=headers, timeout=30)
 
         if response.status_code == 404:
-            raise RuntimeError(f"Remote data file not found: {url}")
+            if required:
+                raise RuntimeError(f"Remote data file not found: {url}")
+            return None
 
         response.raise_for_status()
-
         content = response.content
 
         if len(content) < 100:
-            raise RuntimeError(f"Remote data file looks too small: {filename}, {len(content)} bytes")
+            if required:
+                raise RuntimeError(f"Remote data file looks too small: {filename}, {len(content)} bytes")
+            return None
 
         with open(tmp_path, "wb") as f:
             f.write(content)
 
         os.replace(tmp_path, dest_path)
+        return {"filename": filename, "bytes": len(content)}
 
-        downloaded.append({
-            "filename": filename,
-            "bytes": len(content),
-        })
+    downloaded = []
+
+    # 빠른 경로: 앱 표시용 payload 하나만 있으면 DB/history는 앱 시작 때 받지 않는다.
+    payload_result = download_one("suno_app_payload.zip", required=False)
+    if payload_result:
+        downloaded.append(payload_result)
+        return {
+            "enabled": True,
+            "message": "App payload synced.",
+            "downloaded": downloaded,
+        }
+
+    # 첫 배포 직후 payload가 아직 없을 때만 기존 계산 fallback용 원본 데이터를 받는다.
+    for filename in ["suno_song_db.zip", "suno_song_history.zip"]:
+        result = download_one(filename, required=True)
+        if result:
+            downloaded.append(result)
 
     return {
         "enabled": True,
-        "message": "Remote data files synced.",
+        "message": "Fallback DB/history files synced.",
         "downloaded": downloaded,
     }
 
@@ -503,7 +520,7 @@ def file_fingerprint(path):
         "size": stat.st_size,
     }
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=900)
 def load_encrypted_data(db_fingerprint, history_fingerprint):
     password = st.secrets.get("DATA_ZIP_PASSWORD")
 
@@ -524,6 +541,61 @@ def load_encrypted_data(db_fingerprint, history_fingerprint):
         hist = pd.DataFrame()
 
     return db, hist, ""
+
+
+@st.cache_data(ttl=900)
+def load_app_payload(payload_fingerprint):
+    password = st.secrets.get("DATA_ZIP_PASSWORD")
+
+    if not password:
+        return None, "DATA_ZIP_PASSWORD가 Streamlit secrets에 없습니다."
+
+    payload_path = decrypt_zip_to_file(APP_PAYLOAD_ZIP_PATH, DATA_DIR, password)
+
+    if not payload_path or not os.path.exists(payload_path):
+        return None, "suno_app_payload.zip이 아직 없습니다. 기존 DB 계산 모드로 전환합니다."
+
+    try:
+        with open(payload_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload, ""
+    except Exception as e:
+        return None, f"app payload를 읽지 못했습니다: {e}"
+
+
+def payload_to_df(songs):
+    if not songs:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(songs)
+
+    if "created_at_raw" in df.columns:
+        df["created_at"] = pd.to_datetime(df["created_at_raw"], errors="coerce", utc=True)
+    elif "created_at" in df.columns:
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
+
+    return df
+
+
+def render_player_ranking_payload(songs, histories=None):
+    songs = songs or []
+    histories = histories or {}
+
+    songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
+    histories_json = json.dumps(histories, ensure_ascii=False).replace("</", "<\\/")
+
+    ranking_config = {
+        "play_weight": PLAY_WEIGHT,
+        "like_weight": LIKE_WEIGHT,
+        "comment_weight": COMMENT_WEIGHT,
+        "growth_weight": GROWTH_WEIGHT,
+        "freshness_weight": FRESHNESS_WEIGHT,
+        "freshness_power": FRESHNESS_POWER,
+        "growth_window_hours": GROWTH_WINDOW_HOURS,
+    }
+    ranking_config_json = json.dumps(ranking_config, ensure_ascii=False)
+
+    return render_player_ranking_html(songs_json, histories_json, ranking_config_json)
 
 
 def prepare_db(db):
@@ -1043,6 +1115,10 @@ def render_player_ranking(df, hist):
     }
     ranking_config_json = json.dumps(ranking_config, ensure_ascii=False)
 
+    return render_player_ranking_html(songs_json, histories_json, ranking_config_json)
+
+
+def render_player_ranking_html(songs_json, histories_json, ranking_config_json):
     html_template = """
     <style>
     :root {
@@ -2886,8 +2962,8 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Trending v1.02")
-st.caption("최근 4일 생성곡 기준으로 누적 반응,  최근 변화량 등 반영")
+st.title("Suno Trending v1.03")
+st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
 
 if st.button("데이터 새로고침"):
     st.cache_data.clear()
@@ -2898,6 +2974,130 @@ try:
 except Exception as e:
     st.warning(f"Remote data sync failed. Using existing local data files. Error: {e}")
 
+payload_fingerprint = file_fingerprint(APP_PAYLOAD_ZIP_PATH)
+payload, payload_error = load_app_payload(payload_fingerprint)
+
+if payload:
+    meta = payload.get("meta", {})
+    tabs_payload = payload.get("tabs", {})
+
+    total_songs = meta.get("active_song_count", 0)
+    latest_created_txt = meta.get("newest_created_at", "-") or "-"
+    last_checked_txt = meta.get("last_checked_at", "-") or "-"
+    generated_at_txt = meta.get("generated_at", "-") or "-"
+
+    left_top, right_top = st.columns([0.9, 1.1], gap="large")
+
+    with left_top:
+        st.markdown("### 데이터 정보")
+
+        with st.container(border=True):
+            row1_label, row1_value = st.columns([0.45, 0.55])
+            with row1_label:
+                st.caption("Active 곡 수")
+            with row1_value:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:15px; font-weight:800;'>{int(total_songs or 0):,}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            row2_label, row2_value = st.columns([0.45, 0.55])
+            with row2_label:
+                st.caption("최신 생성곡")
+            with row2_value:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{latest_created_txt}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            row3_label, row3_value = st.columns([0.45, 0.55])
+            with row3_label:
+                st.caption("마지막 업데이트")
+            with row3_value:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{last_checked_txt}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            row4_label, row4_value = st.columns([0.45, 0.55])
+            with row4_label:
+                st.caption("Payload 생성")
+            with row4_value:
+                st.markdown(
+                    f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{generated_at_txt}</div>",
+                    unsafe_allow_html=True,
+                )
+
+    with right_top:
+        st.markdown("### 수동 곡 추가")
+
+        with st.container(border=True):
+            with st.form("manual_add_song_form", clear_on_submit=True):
+                manual_suno_url = st.text_input(
+                    "Suno song link",
+                    placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
+                    label_visibility="collapsed",
+                )
+
+                submit_col1, submit_col2 = st.columns([0.28, 0.72])
+
+                with submit_col1:
+                    submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
+
+                with submit_col2:
+                    st.caption("지원 링크: /song/... 또는 /s/...")
+
+            if submitted:
+                ok, msg = is_valid_suno_link(manual_suno_url)
+
+                if not ok:
+                    st.warning(msg)
+                else:
+                    ok, msg = queue_manual_song_url(manual_suno_url)
+
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+
+    st.divider()
+
+    new_tab, top_tab, crew_tab = st.tabs(["New Song", "Top 200", "Rain Crew"])
+
+    def get_tab_payload(key):
+        tab = tabs_payload.get(key, {})
+        return tab.get("songs", []) or [], tab.get("histories", {}) or {}, tab.get("description", "")
+
+    with new_tab:
+        songs, histories, description = get_tab_payload("new_songs")
+        st.caption(description or "생성일 기준 최신순")
+        if songs:
+            render_player_ranking_payload(songs, histories)
+        else:
+            st.info("New Song 표시 데이터가 없습니다.")
+
+    with top_tab:
+        songs, histories, description = get_tab_payload("top200")
+        st.caption(description or "최근 4일 이내 곡 중 trend_score 상위 200")
+        if songs:
+            render_player_ranking_payload(songs, histories)
+        else:
+            st.info("Top 200 표시 데이터가 없습니다.")
+
+    with crew_tab:
+        songs, histories, description = get_tab_payload("rain_crew")
+        st.caption(description or "Rain Crew 설정에 포함된 크리에이터 곡 최신순")
+        if songs:
+            render_player_ranking_payload(songs, histories)
+        else:
+            st.info("Rain Crew 표시 데이터가 없습니다. config/rain_crew.json에 handle 또는 user_id를 추가하세요.")
+
+    st.stop()
+
+if payload_error:
+    st.warning(payload_error)
+
+# Payload가 아직 만들어지지 않은 첫 실행을 위한 기존 계산 fallback.
 db_fingerprint = file_fingerprint(DB_ZIP_PATH)
 history_fingerprint = file_fingerprint(HISTORY_ZIP_PATH)
 
@@ -2929,85 +3129,34 @@ scored = score_songs(
     freshness_power=FRESHNESS_POWER,
 )
 
-view = filter_view(scored)
-view = add_outlier_flags(view, sigma=OUTLIER_SIGMA, use_log=OUTLIER_USE_LOG)
+active = filter_view(scored)
+active = add_outlier_flags(active, sigma=OUTLIER_SIGMA, use_log=OUTLIER_USE_LOG)
 
-view = view.sort_values("trend_score", ascending=False, na_position="last").head(TOP_N).copy()
-view = view.reset_index(drop=True)
-view.insert(0, "rank", range(1, len(view) + 1))
+new_view = active.sort_values("created_at", ascending=False, na_position="last").head(TOP_N).copy()
+new_view = new_view.reset_index(drop=True)
+new_view.insert(0, "rank", range(1, len(new_view) + 1))
+
+top_view = active.sort_values("trend_score", ascending=False, na_position="last").head(TOP_N).copy()
+top_view = top_view.reset_index(drop=True)
+top_view.insert(0, "rank", range(1, len(top_view) + 1))
 
 total_songs = len(db)
 last_checked = db["last_checked_at"].max() if "last_checked_at" in db.columns else pd.NaT
 newest_created = db["created_at"].max() if "created_at" in db.columns else pd.NaT
 
-left_top, right_top = st.columns([0.9, 1.1], gap="large")
-
 latest_created_txt = newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-"
 last_checked_txt = last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
 
-with left_top:
-    st.markdown("### 데이터 정보")
-
-    with st.container(border=True):
-        row1_label, row1_value = st.columns([0.45, 0.55])
-        with row1_label:
-            st.caption("DB 곡 수")
-        with row1_value:
-            st.markdown(
-                f"<div style='text-align:right; font-size:15px; font-weight:800;'>{total_songs:,}</div>",
-                unsafe_allow_html=True,
-            )
-
-        row2_label, row2_value = st.columns([0.45, 0.55])
-        with row2_label:
-            st.caption("최신 생성곡")
-        with row2_value:
-            st.markdown(
-                f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{latest_created_txt}</div>",
-                unsafe_allow_html=True,
-            )
-
-        row3_label, row3_value = st.columns([0.45, 0.55])
-        with row3_label:
-            st.caption("마지막 업데이트")
-        with row3_value:
-            st.markdown(
-                f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{last_checked_txt}</div>",
-                unsafe_allow_html=True,
-            )
-
-with right_top:
-    st.markdown("### 수동 곡 추가")
-
-    with st.container(border=True):
-        with st.form("manual_add_song_form", clear_on_submit=True):
-            manual_suno_url = st.text_input(
-                "Suno song link",
-                placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
-                label_visibility="collapsed",
-            )
-
-            submit_col1, submit_col2 = st.columns([0.28, 0.72])
-
-            with submit_col1:
-                submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
-
-            with submit_col2:
-                st.caption("지원 링크: /song/... 또는 /s/...")
-
-        if submitted:
-            ok, msg = is_valid_suno_link(manual_suno_url)
-
-            if not ok:
-                st.warning(msg)
-            else:
-                ok, msg = queue_manual_song_url(manual_suno_url)
-
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-
+st.info("현재는 app payload가 없어 기존 계산 fallback으로 표시 중입니다. GitHub Actions가 한 번 실행되면 빨라집니다.")
+st.markdown(f"**Active 곡 수:** {total_songs:,} · **최신 생성곡:** {latest_created_txt} · **마지막 업데이트:** {last_checked_txt}")
 st.divider()
 
-render_player_ranking(view, hist)
+new_tab, top_tab, crew_tab = st.tabs(["New Song", "Top 200", "Rain Crew"])
+with new_tab:
+    st.caption("생성일 기준 최신순")
+    render_player_ranking(new_view, hist)
+with top_tab:
+    st.caption("최근 4일 이내 곡 중 trend_score 상위 200")
+    render_player_ranking(top_view, hist)
+with crew_tab:
+    st.info("Rain Crew 탭은 app payload 생성 후 config/rain_crew.json 기준으로 표시됩니다.")
