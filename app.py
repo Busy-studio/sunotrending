@@ -3423,7 +3423,7 @@ fallback_tabs = {
     },
     "rain_crew": {
         "title": "☔rain crew",
-        "description": "☔rain crew 탭은 app payload 생성 후 config/rain_crew.json 기준으로 표시됩니다.",
+        "description": "☔rain crew 멤버 곡 최신순",
         "songs": [],
         "histories": {},
     },
