@@ -608,6 +608,29 @@ def normalize_payload_songs(songs):
     return [normalize_payload_song(dict(song)) for song in (songs or []) if isinstance(song, dict)]
 
 
+
+
+TAB_LABELS = {
+    "new_songs": "New Song",
+    "top200": "Top 200",
+    "rain_crew": "Rain Crew",
+}
+
+TAB_DESCRIPTIONS = {
+    "new_songs": "생성일 기준 최신순",
+    "top200": "최근 4일 이내 곡 중 trend_score 상위 200",
+    "rain_crew": "Rain Crew 설정에 포함된 크리에이터 곡 최신순",
+}
+
+def display_tab_label(key, raw_title=None):
+    title = clean_payload_text(raw_title or "")
+    return title or TAB_LABELS.get(str(key), str(key).replace("_", " ").title())
+
+def display_tab_description(key, raw_description=None):
+    description = clean_payload_text(raw_description or "")
+    return description or TAB_DESCRIPTIONS.get(str(key), "")
+
+
 def ranking_config_json():
     ranking_config = {
         "play_weight": PLAY_WEIGHT,
@@ -646,14 +669,16 @@ def render_player_ranking_payload_tabs(tabs_payload, tabs_order=None, default_ke
         tab = tabs_payload.get(key, {}) or {}
         songs = normalize_payload_songs(tab.get("songs", []) or [])
         histories = tab.get("histories", {}) or {}
-        title = clean_payload_text(tab.get("title") or key)
-        description = clean_payload_text(tab.get("description") or "")
+        title = display_tab_label(key, tab.get("title"))
+        description = display_tab_description(key, tab.get("description"))
         cleaned_tabs[key] = {
             "title": title,
             "description": description,
             "songs": songs,
             "histories": histories,
         }
+
+    tabs_order = [key for key in tabs_order if key in cleaned_tabs]
 
     if not cleaned_tabs:
         st.info("표시할 탭 데이터가 없습니다.")
@@ -2159,6 +2184,38 @@ def render_player_ranking_html(
             .replaceAll("'", "&#039;");
     }
 
+    const TAB_LABEL_FALLBACKS = {
+        "new_songs": "New Song",
+        "top200": "Top 200",
+        "rain_crew": "Rain Crew",
+    };
+
+    const TAB_DESCRIPTION_FALLBACKS = {
+        "new_songs": "생성일 기준 최신순",
+        "top200": "최근 4일 이내 곡 중 trend_score 상위 200",
+        "rain_crew": "Rain Crew 설정에 포함된 크리에이터 곡 최신순",
+    };
+
+    function prettifyTabKey(key) {
+        return String(key || "")
+            .split("_")
+            .filter(Boolean)
+            .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+            .join(" ");
+    }
+
+    function getTabTitle(key, tab) {
+        const raw = tab && tab.title ? String(tab.title).trim() : "";
+        if (raw) return raw;
+        return TAB_LABEL_FALLBACKS[key] || prettifyTabKey(key) || "Suno Songs";
+    }
+
+    function getTabDescription(key, tab) {
+        const raw = tab && tab.description ? String(tab.description).trim() : "";
+        if (raw) return raw;
+        return TAB_DESCRIPTION_FALLBACKS[key] || "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다.";
+    }
+
     function formatInt(n) {
         try {
             return Number(n || 0).toLocaleString();
@@ -3094,8 +3151,8 @@ function cycleSort(key) {
         songs = Array.isArray(tab.songs) ? tab.songs : [];
         histories = tab.histories || {};
 
-        if (rankingTitle) rankingTitle.textContent = tab.title || key;
-        if (rankingSub) rankingSub.textContent = tab.description || "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다.";
+        if (rankingTitle) rankingTitle.textContent = getTabTitle(key, tab);
+        if (rankingSub) rankingSub.textContent = getTabDescription(key, tab);
 
         sortState = { key: null, direction: null };
         setActiveTabButton(key);
@@ -3123,7 +3180,7 @@ function cycleSort(key) {
             btn.type = "button";
             btn.className = "rank-view-tab";
             btn.dataset.tabKey = key;
-            btn.textContent = tab.title || key;
+            btn.textContent = getTabTitle(key, tab);
             btn.addEventListener("click", () => activateRankTab(key, true));
             rankViewTabs.appendChild(btn);
         });
@@ -3365,7 +3422,7 @@ fallback_tabs = {
         "histories": top200_histories,
     },
     "rain_crew": {
-        "title": "Rain Crew",
+        "title": "☔rain crew",
         "description": "Rain Crew 탭은 app payload 생성 후 config/rain_crew.json 기준으로 표시됩니다.",
         "songs": [],
         "histories": {},
