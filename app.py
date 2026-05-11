@@ -358,6 +358,42 @@ def sync_remote_data_files(raw_base_url, github_token=""):
 # Auth + user data helpers
 # ================================
 
+def is_auth_configured():
+    """Return True only when Streamlit OIDC settings look complete.
+
+    This keeps the chart usable while Google OAuth values are missing or being configured.
+    """
+    try:
+        auth_cfg = st.secrets.get("auth", {})
+        google_cfg = auth_cfg.get("google", {}) if hasattr(auth_cfg, "get") else {}
+
+        redirect_uri = str(auth_cfg.get("redirect_uri", "")).strip() if hasattr(auth_cfg, "get") else ""
+        cookie_secret = str(auth_cfg.get("cookie_secret", "")).strip() if hasattr(auth_cfg, "get") else ""
+        client_id = str(google_cfg.get("client_id", "")).strip() if hasattr(google_cfg, "get") else ""
+        client_secret = str(google_cfg.get("client_secret", "")).strip() if hasattr(google_cfg, "get") else ""
+
+        bad_fragments = [
+            "...",
+            "xxxx",
+            "직접_",
+            "python으로_",
+            "GOOGLE_CLIENT",
+            "실제_",
+        ]
+
+        values = [redirect_uri, cookie_secret, client_id, client_secret]
+        if not all(values):
+            return False
+
+        return not any(any(fragment in value for fragment in bad_fragments) for value in values)
+    except Exception:
+        return False
+
+
+def auth_login_available():
+    return is_auth_configured() and hasattr(st, "login") and hasattr(st, "logout")
+
+
 def get_current_user():
     """Return a small user dict when Streamlit OIDC login is available and active."""
     try:
@@ -425,21 +461,27 @@ def render_auth_box(current_user):
         if current_user:
             st.success(f"Google 로그인됨: {current_user.get('name')}")
             st.caption(current_user.get("email", ""))
-            if st.button("로그아웃", use_container_width=True):
+            if auth_login_available() and st.button("로그아웃", use_container_width=True):
                 try:
                     st.logout()
                 except Exception as e:
                     st.warning(f"로그아웃을 실행할 수 없습니다: {e}")
-        else:
-            st.info("Google 로그인하면 수동 곡 추가와 개인 플레이리스트 저장을 사용할 수 있습니다.")
-            if st.button("Google로 로그인", use_container_width=True):
-                try:
-                    st.login("google")
-                except Exception as e:
-                    st.error(
-                        "Google 로그인을 시작하지 못했습니다. Streamlit secrets의 [auth] / [auth.google] 설정을 확인하세요. "
-                        f"오류: {e}"
-                    )
+            return
+
+        if not auth_login_available():
+            st.info("Google 로그인 설정 대기중입니다. 차트는 계속 사용할 수 있습니다.")
+            st.caption("Streamlit Secrets에 [auth] / [auth.google] 실제값을 넣으면 로그인 버튼이 활성화됩니다.")
+            return
+
+        st.info("Google 로그인하면 수동 곡 추가와 개인 플레이리스트 저장을 사용할 수 있습니다.")
+        if st.button("Google로 로그인", use_container_width=True):
+            try:
+                st.login("google")
+            except Exception as e:
+                st.error(
+                    "Google 로그인을 시작하지 못했습니다. Streamlit secrets의 [auth] / [auth.google] 설정을 확인하세요. "
+                    f"오류: {e}"
+                )
 
 
 def github_headers():
@@ -3901,8 +3943,8 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.05.1 Auth")
-st.caption("Actions payload 기반 차트 + Google 로그인 사용자 기능을 제공합니다. 차트 렌더링을 우선합니다.")
+st.title("Suno Chart v1.05.2 Auth Safe")
+st.caption("Actions payload 기반 차트 + 선택적 Google 로그인 기능을 제공합니다. Auth 설정이 없어도 차트가 먼저 표시됩니다.")
 
 current_user = get_current_user()
 render_auth_box(current_user)
@@ -3975,12 +4017,15 @@ if payload:
 
         with st.container(border=True):
             if not current_user:
-                st.info("Google 로그인 후 수동 곡 추가를 사용할 수 있습니다.")
-                if st.button("Google로 로그인하기", key="manual_login_button", use_container_width=True):
-                    try:
-                        st.login("google")
-                    except Exception as e:
-                        st.error(f"Google 로그인을 시작하지 못했습니다: {e}")
+                if auth_login_available():
+                    st.info("Google 로그인 후 수동 곡 추가를 사용할 수 있습니다.")
+                    if st.button("Google로 로그인하기", key="manual_login_button", use_container_width=True):
+                        try:
+                            st.login("google")
+                        except Exception as e:
+                            st.error(f"Google 로그인을 시작하지 못했습니다: {e}")
+                else:
+                    st.info("Google 로그인 설정이 완료되면 수동 곡 추가를 사용할 수 있습니다.")
             else:
                 st.caption(f"요청자: {current_user.get('name')} · 로그인 사용자만 queue에 추가할 수 있습니다.")
                 with st.form("manual_add_song_form", clear_on_submit=True):
