@@ -618,7 +618,7 @@ TAB_LABELS = {
 
 TAB_DESCRIPTIONS = {
     "new_songs": "생성일 기준 최신순",
-    "top200": "최근 4일 이내 곡 중 trend_score 상위 200",
+    "top200": "현재 날짜 기준 4일 이내 전체 DB 곡 중 trend_score 상위 200",
     "rain_crew": "☔rain crew 멤버 곡 최신순",
 }
 
@@ -772,6 +772,41 @@ def prepare_db(db):
 
     return db
 
+
+
+
+def restore_created_at_from_history_df(db, hist):
+    """Fallback-mode repair: fill missing DB created_at from history before scoring."""
+    if db is None or db.empty or hist is None or hist.empty:
+        return db
+    if "id" not in db.columns or "id" not in hist.columns or "created_at" not in hist.columns:
+        return db
+
+    db = db.copy()
+    hist = hist.copy()
+
+    if "created_at" not in db.columns:
+        db["created_at"] = pd.NaT
+
+    db["id"] = db["id"].astype(str)
+    hist["id"] = hist["id"].astype(str)
+
+    db_created = pd.to_datetime(db["created_at"], errors="coerce", utc=True)
+    hist_created = pd.to_datetime(hist["created_at"], errors="coerce", utc=True)
+    hist = hist.assign(__created_at_dt=hist_created).dropna(subset=["__created_at_dt"])
+
+    if hist.empty:
+        return db
+
+    created_map = hist.groupby("id")["__created_at_dt"].min()
+    missing = db_created.isna()
+    restored = db.loc[missing, "id"].map(created_map)
+    has_restored = restored.notna()
+
+    if has_restored.any():
+        db.loc[missing & has_restored, "created_at"] = restored[has_restored]
+
+    return db
 
 def prepare_history(hist):
     if hist is None or hist.empty:
@@ -2192,8 +2227,8 @@ def render_player_ranking_html(
 
     const TAB_DESCRIPTION_FALLBACKS = {
         "new_songs": "생성일 기준 최신순",
-        "top200": "최근 4일 이내 곡 중 trend_score 상위 200",
-        "rain_crew": "☔rain crew 설정에 포함된 크리에이터 곡 최신순",
+        "top200": "현재 날짜 기준 4일 이내 전체 DB 곡 중 trend_score 상위 200",
+        "rain_crew": "☔rain crew 멤버 곡 최신순",
     };
 
     function prettifyTabKey(key) {
@@ -3229,7 +3264,7 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.03")
+st.title("Suno Chart v1.04")
 st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
 
 if st.button("데이터 새로고침"):
@@ -3365,6 +3400,7 @@ if raw_db is None or raw_db.empty:
     st.warning("DB가 비어 있습니다. GitHub Actions가 신규곡을 수집한 뒤 다시 확인하세요.")
     st.stop()
 
+raw_db = restore_created_at_from_history_df(raw_db, raw_hist)
 db = prepare_db(raw_db)
 hist = prepare_history(raw_hist)
 

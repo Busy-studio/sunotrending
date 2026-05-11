@@ -702,8 +702,8 @@ def choose_rows_to_update(db):
     if "created_at" in out.columns:
         out["created_at_dt"] = pd.to_datetime(out["created_at"], errors="coerce", utc=True)
 
-        # created_at이 비어 있는 곡은 상세 페이지 재조회 기회가 없으면 계속 Top 200 후보에서 빠진다.
-        # 그래서 missing-created 곡을 우선 업데이트하고, 나머지는 최신순으로 채운다.
+        # created_at이 비어 있는 곡은 상세 페이지 재조회 기회가 없으면 계속 Top 200 후보에서 빠질 수 있다.
+        # missing-created 곡을 먼저 업데이트하고, 나머지는 최신 생성순으로 업데이트한다.
         missing_created = out["created_at_dt"].isna()
         missing_part = out[missing_created].copy()
         normal_part = out[~missing_created].sort_values("created_at_dt", ascending=False, na_position="last").copy()
@@ -719,7 +719,7 @@ def choose_rows_to_update(db):
 
 
 def restore_created_at_from_history(db):
-    """Fill missing active DB created_at from history snapshots and save the repaired DB in memory."""
+    """Fill missing active DB created_at from history snapshots."""
     if db is None or db.empty:
         return db
 
@@ -760,9 +760,12 @@ def restore_created_at_from_history(db):
     created_map = hist.groupby("id")["__created_at_dt"].min()
     missing = db_created.isna()
     restored = db.loc[missing, "id"].map(created_map)
-    restored_count = int(restored.notna().sum())
+    has_restored = restored.notna()
+    restored_count = int(has_restored.sum())
 
-    db.loc[missing & restored.notna(), "created_at"] = restored[restored.notna()].dt.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+    if restored_count:
+        restored_values = restored[has_restored].dt.tz_convert("UTC").dt.strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
+        db.loc[missing & has_restored, "created_at"] = restored_values
 
     after_valid = int(pd.to_datetime(db["created_at"], errors="coerce", utc=True).notna().sum())
     print(
