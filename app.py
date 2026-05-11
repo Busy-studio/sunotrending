@@ -619,7 +619,7 @@ TAB_LABELS = {
 TAB_DESCRIPTIONS = {
     "new_songs": "생성일 기준 최신순",
     "top200": "최근 4일 이내 곡 중 trend_score 상위 200",
-    "rain_crew": "☔rain crew 설정에 포함된 크리에이터 곡 최신순",
+    "rain_crew": "☔rain crew 멤버 곡 최신순",
 }
 
 def display_tab_label(key, raw_title=None):
