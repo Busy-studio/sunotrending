@@ -608,18 +608,7 @@ def normalize_payload_songs(songs):
     return [normalize_payload_song(dict(song)) for song in (songs or []) if isinstance(song, dict)]
 
 
-def render_player_ranking_payload(songs, histories=None, title="Top 200 Trending", subtitle=None):
-    songs = normalize_payload_songs(songs)
-    histories = histories or {}
-
-    title = clean_payload_text(title) or "Suno Songs"
-    subtitle = clean_payload_text(subtitle) or "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다."
-
-    songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
-    histories_json = json.dumps(histories, ensure_ascii=False).replace("</", "<\\/")
-    title_html = html.escape(title)
-    subtitle_html = html.escape(subtitle)
-
+def ranking_config_json():
     ranking_config = {
         "play_weight": PLAY_WEIGHT,
         "like_weight": LIKE_WEIGHT,
@@ -629,9 +618,69 @@ def render_player_ranking_payload(songs, histories=None, title="Top 200 Trending
         "freshness_power": FRESHNESS_POWER,
         "growth_window_hours": GROWTH_WINDOW_HOURS,
     }
-    ranking_config_json = json.dumps(ranking_config, ensure_ascii=False)
+    return json.dumps(ranking_config, ensure_ascii=False)
 
-    return render_player_ranking_html(songs_json, histories_json, ranking_config_json)
+
+def render_player_ranking_payload(songs, histories=None, title="Top 200 Trending", subtitle=None):
+    songs = normalize_payload_songs(songs)
+    histories = histories or {}
+
+    songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
+    histories_json = json.dumps(histories, ensure_ascii=False).replace("</", "<\\/")
+
+    return render_player_ranking_html(
+        songs_json,
+        histories_json,
+        ranking_config_json(),
+        title=title,
+        subtitle=subtitle,
+    )
+
+
+def render_player_ranking_payload_tabs(tabs_payload, tabs_order=None, default_key="top200"):
+    tabs_payload = tabs_payload or {}
+    tabs_order = tabs_order or list(tabs_payload.keys())
+
+    cleaned_tabs = {}
+    for key in tabs_order:
+        tab = tabs_payload.get(key, {}) or {}
+        songs = normalize_payload_songs(tab.get("songs", []) or [])
+        histories = tab.get("histories", {}) or {}
+        title = clean_payload_text(tab.get("title") or key)
+        description = clean_payload_text(tab.get("description") or "")
+        cleaned_tabs[key] = {
+            "title": title,
+            "description": description,
+            "songs": songs,
+            "histories": histories,
+        }
+
+    if not cleaned_tabs:
+        st.info("표시할 탭 데이터가 없습니다.")
+        return
+
+    if default_key not in cleaned_tabs:
+        default_key = tabs_order[0] if tabs_order else next(iter(cleaned_tabs.keys()))
+
+    first_tab = cleaned_tabs.get(default_key, {})
+    first_songs = first_tab.get("songs", []) or []
+    first_histories = first_tab.get("histories", {}) or {}
+
+    songs_json = json.dumps(first_songs, ensure_ascii=False).replace("</", "<\\/")
+    histories_json = json.dumps(first_histories, ensure_ascii=False).replace("</", "<\\/")
+    tabs_json = json.dumps(cleaned_tabs, ensure_ascii=False).replace("</", "<\\/")
+    tabs_order_json = json.dumps(tabs_order, ensure_ascii=False).replace("</", "<\\/")
+
+    return render_player_ranking_html(
+        songs_json,
+        histories_json,
+        ranking_config_json(),
+        title=first_tab.get("title") or "Suno Songs",
+        subtitle=first_tab.get("description") or "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다.",
+        tabs_json=tabs_json,
+        tabs_order_json=tabs_order_json,
+        default_tab_key=default_key,
+    )
 
 
 def prepare_db(db):
@@ -1140,21 +1189,30 @@ def render_player_ranking(df, hist):
     songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
     histories_json = json.dumps(histories, ensure_ascii=False).replace("</", "<\\/")
 
-    ranking_config = {
-        "play_weight": PLAY_WEIGHT,
-        "like_weight": LIKE_WEIGHT,
-        "comment_weight": COMMENT_WEIGHT,
-        "growth_weight": GROWTH_WEIGHT,
-        "freshness_weight": FRESHNESS_WEIGHT,
-        "freshness_power": FRESHNESS_POWER,
-        "growth_window_hours": GROWTH_WINDOW_HOURS,
-    }
-    ranking_config_json = json.dumps(ranking_config, ensure_ascii=False)
-
-    return render_player_ranking_html(songs_json, histories_json, ranking_config_json)
+    return render_player_ranking_html(
+        songs_json,
+        histories_json,
+        ranking_config_json(),
+        title="Top 200",
+        subtitle="최근 4일 이내 곡 중 trend_score 상위 200",
+    )
 
 
-def render_player_ranking_html(songs_json, histories_json, ranking_config_json):
+def render_player_ranking_html(
+    songs_json,
+    histories_json,
+    ranking_config_json,
+    title="Top 200",
+    subtitle=None,
+    tabs_json="null",
+    tabs_order_json="[]",
+    default_tab_key="",
+):
+    title = clean_payload_text(title) or "Suno Songs"
+    subtitle = clean_payload_text(subtitle) or "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다."
+    title_html = html.escape(title)
+    subtitle_html = html.escape(subtitle)
+    default_tab_key_js = json.dumps(default_tab_key or "", ensure_ascii=False)
     html_template = """
     <style>
     :root {
@@ -1492,6 +1550,36 @@ def render_player_ranking_html(songs_json, histories_json, ranking_config_json):
         padding: 12px;
         background: #ffffff;
         border-bottom: 1px solid var(--line);
+    }
+
+    .rank-view-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-bottom: 8px;
+    }
+
+    .rank-view-tab {
+        border: 1px solid var(--line-dark);
+        background: #ffffff;
+        color: var(--muted);
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 12px;
+        font-weight: 900;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .rank-view-tab:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+
+    .rank-view-tab.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #ffffff;
     }
 
     .ranking-title {
@@ -1932,8 +2020,9 @@ def render_player_ranking_html(songs_json, histories_json, ranking_config_json):
         <main class="ranking-panel">
             <div class="ranking-topbar">
                 <div>
-                    <div class="ranking-title">{title_html}</div>
-                    <div class="ranking-sub">{subtitle_html}</div>
+                    <div class="rank-view-tabs" id="rankViewTabs"></div>
+                    <div class="ranking-title" id="rankingTitle">{title_html}</div>
+                    <div class="ranking-sub" id="rankingSub">{subtitle_html}</div>
                 </div>
                 <input class="search-input" id="searchInput" placeholder="Search title / style / creator / handle">
             </div>
@@ -2002,9 +2091,12 @@ def render_player_ranking_html(songs_json, histories_json, ranking_config_json):
     </div>
 
     <script>
-    const songs = __SONGS_JSON__;
-    const histories = __HISTORIES_JSON__;
+    let songs = __SONGS_JSON__;
+    let histories = __HISTORIES_JSON__;
     const rankingConfig = __RANKING_CONFIG_JSON__;
+    const tabsData = __TABS_JSON__;
+    const tabsOrder = __TABS_ORDER_JSON__;
+    const defaultTabKey = __DEFAULT_TAB_KEY__;
 
     let playlist = [];
     let currentIndex = -1;
@@ -2041,6 +2133,9 @@ def render_player_ranking_html(songs_json, histories_json, ranking_config_json):
     const currentTimeEl = document.getElementById("currentTime");
     const durationEl = document.getElementById("duration");
     const searchInput = document.getElementById("searchInput");
+    const rankViewTabs = document.getElementById("rankViewTabs");
+    const rankingTitle = document.getElementById("rankingTitle");
+    const rankingSub = document.getElementById("rankingSub");
     const songTableBody = document.getElementById("songTableBody");
 
     const rankingModal = document.getElementById("rankingModal");
@@ -2972,8 +3067,82 @@ function cycleSort(key) {
         }
     });
 
+    function resetPlayerForTabSwitch() {
+        playlist = [];
+        currentIndex = -1;
+        audio.pause();
+        audio.removeAttribute("src");
+        progress.value = 0;
+        currentTimeEl.textContent = "0:00";
+        durationEl.textContent = "0:00";
+        updateNowPlaying(null);
+        renderPlaylist();
+        refreshButtonsAndCovers();
+    }
+
+    function setActiveTabButton(activeKey) {
+        if (!rankViewTabs) return;
+        rankViewTabs.querySelectorAll(".rank-view-tab").forEach(btn => {
+            btn.classList.toggle("active", btn.dataset.tabKey === activeKey);
+        });
+    }
+
+    function activateRankTab(key, resetPlayer = true) {
+        if (!tabsData || !tabsData[key]) return;
+
+        const tab = tabsData[key] || {};
+        songs = Array.isArray(tab.songs) ? tab.songs : [];
+        histories = tab.histories || {};
+
+        if (rankingTitle) rankingTitle.textContent = tab.title || key;
+        if (rankingSub) rankingSub.textContent = tab.description || "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다.";
+
+        sortState = { key: null, direction: null };
+        setActiveTabButton(key);
+
+        if (searchInput) searchInput.value = "";
+        if (resetPlayer) resetPlayerForTabSwitch();
+        renderTable("");
+    }
+
+    function initRankTabs() {
+        const hasTabs = tabsData && typeof tabsData === "object" && Array.isArray(tabsOrder) && tabsOrder.length > 0;
+
+        if (!hasTabs || !rankViewTabs) {
+            if (rankViewTabs) rankViewTabs.style.display = "none";
+            return false;
+        }
+
+        rankViewTabs.innerHTML = "";
+
+        tabsOrder.forEach(key => {
+            const tab = tabsData[key];
+            if (!tab) return;
+
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "rank-view-tab";
+            btn.dataset.tabKey = key;
+            btn.textContent = tab.title || key;
+            btn.addEventListener("click", () => activateRankTab(key, true));
+            rankViewTabs.appendChild(btn);
+        });
+
+        const initialKey = tabsData[defaultTabKey] ? defaultTabKey : tabsOrder.find(key => tabsData[key]);
+
+        if (initialKey) {
+            activateRankTab(initialKey, false);
+            return true;
+        }
+
+        return false;
+    }
+
     bindSortHeaderEvents();
-    renderTable("");
+    const tabsInitialized = initRankTabs();
+    if (!tabsInitialized) {
+        renderTable("");
+    }
     renderPlaylist();
     refreshModeButtons();
     updateVolume();
@@ -2982,9 +3151,14 @@ function cycleSort(key) {
 
     full_html = (
         html_template
+        .replace("{title_html}", title_html)
+        .replace("{subtitle_html}", subtitle_html)
         .replace("__SONGS_JSON__", songs_json)
         .replace("__HISTORIES_JSON__", histories_json)
         .replace("__RANKING_CONFIG_JSON__", ranking_config_json)
+        .replace("__TABS_JSON__", tabs_json or "null")
+        .replace("__TABS_ORDER_JSON__", tabs_order_json or "[]")
+        .replace("__DEFAULT_TAB_KEY__", default_tab_key_js)
     )
 
     components.html(
@@ -3098,37 +3272,19 @@ if payload:
 
     st.divider()
 
-    new_tab, top_tab, crew_tab = st.tabs(["New Song", "Top 200", "Rain Crew"])
+    tabs_order = payload.get("tabs_order") or ["new_songs", "top200", "rain_crew"]
+    tabs_order = [key for key in tabs_order if key in tabs_payload]
 
-    def get_tab_payload(key):
-        tab = tabs_payload.get(key, {})
-        title = tab.get("title", key)
-        description = tab.get("description", "")
-        return tab.get("songs", []) or [], tab.get("histories", {}) or {}, title, description
-
-    with new_tab:
-        songs, histories, tab_title, description = get_tab_payload("new_songs")
-        st.caption(description or "생성일 기준 최신순")
-        if songs:
-            render_player_ranking_payload(songs, histories, title=tab_title or "New Song", subtitle=description)
-        else:
-            st.info("New Song 표시 데이터가 없습니다.")
-
-    with top_tab:
-        songs, histories, tab_title, description = get_tab_payload("top200")
-        st.caption(description or "최근 4일 이내 곡 중 trend_score 상위 200")
-        if songs:
-            render_player_ranking_payload(songs, histories, title=tab_title or "Top 200", subtitle=description)
-        else:
-            st.info("Top 200 표시 데이터가 없습니다.")
-
-    with crew_tab:
-        songs, histories, tab_title, description = get_tab_payload("rain_crew")
-        st.caption(description or "Rain Crew 설정에 포함된 크리에이터 곡 최신순")
-        if songs:
-            render_player_ranking_payload(songs, histories, title=tab_title or "Rain Crew", subtitle=description)
-        else:
-            st.info("Rain Crew 표시 데이터가 없습니다. config/rain_crew.json에 handle 또는 user_id를 추가하세요.")
+    if not tabs_order:
+        st.info("표시할 탭 payload가 없습니다.")
+    else:
+        # New Song / Top 200 / Rain Crew 선택 버튼은 HTML 컴포넌트 내부의
+        # {title_html} / {subtitle_html} 영역 바로 위에 렌더링된다.
+        render_player_ranking_payload_tabs(
+            tabs_payload,
+            tabs_order=tabs_order,
+            default_key="top200" if "top200" in tabs_order else tabs_order[0],
+        )
 
     st.stop()
 
@@ -3189,12 +3345,35 @@ st.info("현재는 app payload가 없어 기존 계산 fallback으로 표시 중
 st.markdown(f"**Active 곡 수:** {total_songs:,} · **최신 생성곡:** {latest_created_txt} · **마지막 업데이트:** {last_checked_txt}")
 st.divider()
 
-new_tab, top_tab, crew_tab = st.tabs(["New Song", "Top 200", "Rain Crew"])
-with new_tab:
-    st.caption("생성일 기준 최신순")
-    render_player_ranking(new_view, hist)
-with top_tab:
-    st.caption("최근 4일 이내 곡 중 trend_score 상위 200")
-    render_player_ranking(top_view, hist)
-with crew_tab:
-    st.info("Rain Crew 탭은 app payload 생성 후 config/rain_crew.json 기준으로 표시됩니다.")
+new_songs_payload = build_song_payload(new_view)
+new_songs_histories = build_history_payload(hist, [song["id"] for song in new_songs_payload])
+
+top200_payload = build_song_payload(top_view)
+top200_histories = build_history_payload(hist, [song["id"] for song in top200_payload])
+
+fallback_tabs = {
+    "new_songs": {
+        "title": "New Song",
+        "description": "생성일 기준 최신순",
+        "songs": new_songs_payload,
+        "histories": new_songs_histories,
+    },
+    "top200": {
+        "title": "Top 200",
+        "description": "최근 4일 이내 곡 중 trend_score 상위 200",
+        "songs": top200_payload,
+        "histories": top200_histories,
+    },
+    "rain_crew": {
+        "title": "Rain Crew",
+        "description": "Rain Crew 탭은 app payload 생성 후 config/rain_crew.json 기준으로 표시됩니다.",
+        "songs": [],
+        "histories": {},
+    },
+}
+
+render_player_ranking_payload_tabs(
+    fallback_tabs,
+    tabs_order=["new_songs", "top200", "rain_crew"],
+    default_key="top200",
+)
