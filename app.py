@@ -87,7 +87,7 @@ OUTLIER_USE_LOG = True
 
 
 st.set_page_config(
-    page_title="Suno Trending",
+    page_title="Suno Chart",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -3229,7 +3229,7 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Trending v1.03")
+st.title("Suno Chart v1.03")
 st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
 
 if st.button("데이터 새로고침"):
