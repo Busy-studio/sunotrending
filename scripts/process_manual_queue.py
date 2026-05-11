@@ -34,6 +34,9 @@ REQUEST_SLEEP_SECONDS = float(os.getenv("REQUEST_SLEEP_SECONDS", "0.5"))
 QUEUE_COLUMNS = [
     "request_id",
     "submitted_at",
+    "submitted_by_user_key",
+    "submitted_by_email_hash",
+    "submitted_by_name",
     "url",
     "status",
     "song_id",

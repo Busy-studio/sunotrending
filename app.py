@@ -6,6 +6,8 @@ import time
 import requests
 import base64
 import uuid
+import hashlib
+from datetime import datetime, timezone
 from io import StringIO
 import pandas as pd
 import streamlit as st
@@ -65,6 +67,21 @@ MANUAL_QUEUE_PATH = st.secrets.get(
     "MANUAL_QUEUE_PATH",
     os.getenv("MANUAL_QUEUE_PATH", "data/manual_song_queue.csv"),
 )
+
+USER_PLAYLISTS_BASE_PATH = st.secrets.get(
+    "USER_PLAYLISTS_BASE_PATH",
+    os.getenv("USER_PLAYLISTS_BASE_PATH", "data/user_playlists"),
+).strip("/")
+
+PUBLIC_PLAYLIST_INDEX_PATH = st.secrets.get(
+    "PUBLIC_PLAYLIST_INDEX_PATH",
+    os.getenv("PUBLIC_PLAYLIST_INDEX_PATH", "data/public_playlists_index.json"),
+)
+
+APP_PUBLIC_BASE_URL = st.secrets.get(
+    "APP_PUBLIC_BASE_URL",
+    os.getenv("APP_PUBLIC_BASE_URL", ""),
+).rstrip("/")
 
 RETENTION_HOURS = 96  # 4일
 TOP_N = 200
@@ -336,6 +353,451 @@ def sync_remote_data_files(raw_base_url, github_token=""):
         "downloaded": downloaded,
     }
 
+
+# ================================
+# Auth + user data helpers
+# ================================
+
+def get_current_user():
+    """Return a small user dict when Streamlit OIDC login is available and active."""
+    try:
+        user = getattr(st, "user", None)
+        if not user:
+            return None
+
+        is_logged_in = False
+        try:
+            is_logged_in = bool(user.is_logged_in)
+        except Exception:
+            try:
+                is_logged_in = bool(user.get("is_logged_in"))
+            except Exception:
+                is_logged_in = False
+
+        if not is_logged_in:
+            return None
+
+        def user_get(key, default=""):
+            try:
+                value = getattr(user, key)
+            except Exception:
+                try:
+                    value = user.get(key, default)
+                except Exception:
+                    value = default
+            return value or default
+
+        email = str(user_get("email", "")).strip().lower()
+        name = str(user_get("name", "")).strip()
+        picture = str(user_get("picture", "")).strip()
+
+        if not email:
+            # Google/OIDC라면 보통 email이 있지만, 없을 때도 앱이 죽지는 않게 처리한다.
+            email = str(user_get("sub", "")).strip().lower()
+
+        if not email:
+            return None
+
+        return {
+            "email": email,
+            "name": name or email.split("@")[0],
+            "picture": picture,
+            "user_key": user_key_from_email(email),
+        }
+    except Exception:
+        return None
+
+
+def user_key_from_email(email):
+    raw = str(email or "").strip().lower()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def email_hash(email):
+    raw = str(email or "").strip().lower()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def render_auth_box(current_user):
+    with st.sidebar:
+        st.markdown("### Account")
+
+        if current_user:
+            st.success(f"Google 로그인됨: {current_user.get('name')}")
+            st.caption(current_user.get("email", ""))
+            if st.button("로그아웃", use_container_width=True):
+                try:
+                    st.logout()
+                except Exception as e:
+                    st.warning(f"로그아웃을 실행할 수 없습니다: {e}")
+        else:
+            st.info("Google 로그인하면 수동 곡 추가와 개인 플레이리스트 저장을 사용할 수 있습니다.")
+            if st.button("Google로 로그인", use_container_width=True):
+                try:
+                    st.login("google")
+                except Exception as e:
+                    st.error(
+                        "Google 로그인을 시작하지 못했습니다. Streamlit secrets의 [auth] / [auth.google] 설정을 확인하세요. "
+                        f"오류: {e}"
+                    )
+
+
+def github_headers():
+    if not GITHUB_ACTION_TOKEN:
+        return None
+
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {GITHUB_ACTION_TOKEN}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def github_contents_url(path):
+    clean_path = str(path).strip().lstrip("/")
+    return (
+        f"https://api.github.com/repos/"
+        f"{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+        f"/contents/{clean_path}"
+    )
+
+
+def github_read_text_file(path, branch=MANUAL_QUEUE_BRANCH):
+    headers = github_headers()
+    if not headers:
+        return None, None, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
+
+    response = requests.get(
+        github_contents_url(path),
+        headers=headers,
+        params={"ref": branch},
+        timeout=20,
+    )
+
+    if response.status_code == 404:
+        return "", None, ""
+
+    if response.status_code != 200:
+        return None, None, f"GitHub 파일 읽기 실패: {response.status_code} / {response.text[:300]}"
+
+    payload = response.json()
+    encoded = payload.get("content", "")
+    sha = payload.get("sha")
+    text = base64.b64decode(encoded).decode("utf-8") if encoded else ""
+    return text, sha, ""
+
+
+def github_write_text_file(path, text, message, branch=MANUAL_QUEUE_BRANCH, sha=None):
+    headers = github_headers()
+    if not headers:
+        return False, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
+
+    content_b64 = base64.b64encode(str(text).encode("utf-8")).decode("utf-8")
+    put_payload = {
+        "message": message,
+        "content": content_b64,
+        "branch": branch,
+    }
+
+    if sha:
+        put_payload["sha"] = sha
+
+    response = requests.put(
+        github_contents_url(path),
+        headers=headers,
+        json=put_payload,
+        timeout=25,
+    )
+
+    if response.status_code in [200, 201]:
+        return True, ""
+
+    if response.status_code == 409:
+        return False, "GitHub 저장 충돌이 발생했습니다. 다시 시도하세요."
+
+    if response.status_code == 403:
+        return False, "GitHub 저장 권한이 없습니다. 토큰에 Contents: Read and write 권한이 필요합니다."
+
+    return False, f"GitHub 저장 실패: {response.status_code} / {response.text[:300]}"
+
+
+def empty_playlist_store(current_user):
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "version": 1,
+        "owner_user_key": current_user.get("user_key", ""),
+        "owner_display_name": current_user.get("name", ""),
+        "owner_email_hash": email_hash(current_user.get("email", "")),
+        "created_at": now,
+        "updated_at": now,
+        "playlists": [],
+    }
+
+
+def user_playlist_path(user_key):
+    return f"{USER_PLAYLISTS_BASE_PATH}/{user_key}.json"
+
+
+def load_user_playlists(current_user):
+    if not current_user:
+        return None, "로그인이 필요합니다."
+
+    text, sha, err = github_read_text_file(user_playlist_path(current_user["user_key"]))
+    if err:
+        return None, err
+
+    if not text.strip():
+        store = empty_playlist_store(current_user)
+        return {"store": store, "sha": None}, ""
+
+    try:
+        store = json.loads(text)
+    except Exception:
+        store = empty_playlist_store(current_user)
+
+    if "playlists" not in store or not isinstance(store.get("playlists"), list):
+        store["playlists"] = []
+
+    return {"store": store, "sha": sha}, ""
+
+
+def save_user_playlists(current_user, store, sha=None):
+    if not current_user:
+        return False, "로그인이 필요합니다."
+
+    store = dict(store or {})
+    store["version"] = 1
+    store["owner_user_key"] = current_user.get("user_key", "")
+    store["owner_display_name"] = current_user.get("name", "")
+    store["owner_email_hash"] = email_hash(current_user.get("email", ""))
+    store["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    text = json.dumps(store, ensure_ascii=False, indent=2)
+    return github_write_text_file(
+        user_playlist_path(current_user["user_key"]),
+        text,
+        "Update user playlists",
+        sha=sha,
+    )
+
+
+def normalize_playlist(playlist, current_user):
+    now = datetime.now(timezone.utc).isoformat()
+    playlist = dict(playlist or {})
+    playlist.setdefault("playlist_id", f"pl_{uuid.uuid4().hex[:12]}")
+    playlist.setdefault("owner_user_key", current_user.get("user_key", ""))
+    playlist.setdefault("owner_display_name", current_user.get("name", ""))
+    playlist.setdefault("title", "My Playlist")
+    playlist.setdefault("description", "")
+    playlist.setdefault("visibility", "private")
+    playlist.setdefault("song_ids", [])
+    playlist.setdefault("created_at", now)
+    playlist["updated_at"] = now
+    return playlist
+
+
+def collect_payload_song_lookup(tabs_payload):
+    lookup = {}
+    tab_options = {}
+
+    for tab_key, tab in (tabs_payload or {}).items():
+        songs = normalize_payload_songs((tab or {}).get("songs", []) or [])
+        tab_title = display_tab_label(tab_key, (tab or {}).get("title"))
+        tab_options[tab_key] = {
+            "title": tab_title,
+            "songs": songs,
+        }
+
+        for song in songs:
+            song_id = str(song.get("id", "")).strip()
+            if song_id and song_id not in lookup:
+                lookup[song_id] = song
+
+    return lookup, tab_options
+
+
+def song_label(song):
+    title = clean_payload_text(song.get("title", "Untitled")) or "Untitled"
+    handle = clean_payload_text(song.get("handle", ""))
+    created = clean_payload_text(song.get("created_at", ""))
+    stats = f"P{int(song.get('play_count', 0) or 0):,} / L{int(song.get('upvote_count', 0) or 0):,} / C{int(song.get('comment_count', 0) or 0):,}"
+    suffix = " · ".join(x for x in [handle, created, stats] if x)
+    return f"{title} — {suffix}" if suffix else title
+
+
+def render_user_playlist_panel(current_user, tabs_payload):
+    st.markdown("### 내 플레이리스트")
+
+    if not current_user:
+        with st.container(border=True):
+            st.info("Google 로그인 후 개인 플레이리스트를 저장할 수 있습니다.")
+        return
+
+    if not GITHUB_ACTION_TOKEN:
+        with st.container(border=True):
+            st.warning("GITHUB_ACTION_TOKEN이 없어 플레이리스트 저장을 사용할 수 없습니다.")
+        return
+
+    loaded, err = load_user_playlists(current_user)
+    if err:
+        with st.container(border=True):
+            st.error(err)
+        return
+
+    store = loaded["store"]
+    sha = loaded["sha"]
+    playlists = [normalize_playlist(p, current_user) for p in store.get("playlists", [])]
+    store["playlists"] = playlists
+
+    song_lookup, tab_options = collect_payload_song_lookup(tabs_payload)
+
+    with st.container(border=True):
+        create_col, refresh_col = st.columns([0.72, 0.28])
+
+        with create_col:
+            with st.form("create_playlist_form", clear_on_submit=True):
+                new_title = st.text_input("새 플레이리스트 이름", placeholder="예: 오늘 들을 곡")
+                new_desc = st.text_input("설명", placeholder="선택 사항")
+                visibility = st.selectbox("공개 범위", ["private", "public"], format_func=lambda x: "비공개" if x == "private" else "공개")
+                create_submitted = st.form_submit_button("플레이리스트 만들기", use_container_width=True)
+
+            if create_submitted:
+                title = clean_payload_text(new_title) or "My Playlist"
+                playlist = normalize_playlist({
+                    "title": title,
+                    "description": clean_payload_text(new_desc),
+                    "visibility": visibility,
+                    "song_ids": [],
+                }, current_user)
+                playlists.append(playlist)
+                store["playlists"] = playlists
+                ok, msg = save_user_playlists(current_user, store, sha=sha)
+                if ok:
+                    st.success("플레이리스트를 만들었습니다.")
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        with refresh_col:
+            st.caption("저장은 data 브랜치의 사용자별 JSON에 기록됩니다.")
+            if st.button("다시 불러오기", use_container_width=True):
+                st.rerun()
+
+        if not playlists:
+            st.info("아직 저장된 플레이리스트가 없습니다. 먼저 하나 만들어주세요.")
+            return
+
+        playlist_labels = [f"{p.get('title', 'My Playlist')} ({len(p.get('song_ids', []))}곡)" for p in playlists]
+        selected_idx = st.selectbox(
+            "편집할 플레이리스트",
+            list(range(len(playlists))),
+            format_func=lambda i: playlist_labels[i],
+            key="selected_user_playlist_idx",
+        )
+        selected_playlist = playlists[selected_idx]
+
+        meta_col1, meta_col2 = st.columns([0.58, 0.42])
+
+        with meta_col1:
+            new_title = st.text_input("제목", selected_playlist.get("title", "My Playlist"), key="playlist_edit_title")
+            new_desc = st.text_input("설명", selected_playlist.get("description", ""), key="playlist_edit_desc")
+
+        with meta_col2:
+            new_visibility = st.selectbox(
+                "공개 범위",
+                ["private", "public"],
+                index=0 if selected_playlist.get("visibility", "private") != "public" else 1,
+                format_func=lambda x: "비공개" if x == "private" else "공개",
+                key="playlist_edit_visibility",
+            )
+            if new_visibility == "public":
+                base = APP_PUBLIC_BASE_URL or "https://YOUR_APP_URL"
+                st.caption(f"공유 링크 준비: {base}?playlist={selected_playlist.get('playlist_id')}")
+            else:
+                st.caption("비공개 플레이리스트")
+
+        if st.button("플레이리스트 정보 저장", use_container_width=True):
+            selected_playlist["title"] = clean_payload_text(new_title) or "My Playlist"
+            selected_playlist["description"] = clean_payload_text(new_desc)
+            selected_playlist["visibility"] = new_visibility
+            selected_playlist["updated_at"] = datetime.now(timezone.utc).isoformat()
+            playlists[selected_idx] = selected_playlist
+            store["playlists"] = playlists
+            ok, msg = save_user_playlists(current_user, store, sha=sha)
+            if ok:
+                st.success("플레이리스트 정보를 저장했습니다.")
+                st.rerun()
+            else:
+                st.error(msg)
+
+        st.markdown("#### 곡 추가")
+        tab_keys = [key for key, info in tab_options.items() if info.get("songs")]
+        if not tab_keys:
+            st.caption("추가할 수 있는 차트 곡 데이터가 없습니다.")
+        else:
+            source_key = st.selectbox(
+                "차트 선택",
+                tab_keys,
+                format_func=lambda k: tab_options[k]["title"],
+                key="playlist_add_source_tab",
+            )
+            source_songs = tab_options[source_key]["songs"]
+            source_song_ids = [str(s.get("id", "")).strip() for s in source_songs if str(s.get("id", "")).strip()]
+            selected_song_id = st.selectbox(
+                "추가할 곡",
+                source_song_ids,
+                format_func=lambda sid: song_label(song_lookup.get(sid, {"id": sid})),
+                key="playlist_add_song_id",
+            )
+
+            if st.button("선택한 곡 추가", use_container_width=True):
+                song_ids = [str(x) for x in selected_playlist.get("song_ids", [])]
+                if selected_song_id in song_ids:
+                    st.info("이미 이 플레이리스트에 있는 곡입니다.")
+                else:
+                    song_ids.append(selected_song_id)
+                    selected_playlist["song_ids"] = song_ids
+                    selected_playlist["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    playlists[selected_idx] = selected_playlist
+                    store["playlists"] = playlists
+                    ok, msg = save_user_playlists(current_user, store, sha=sha)
+                    if ok:
+                        st.success("곡을 추가했습니다.")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        song_ids = [str(x) for x in selected_playlist.get("song_ids", [])]
+        st.markdown(f"#### 저장된 곡 {len(song_ids)}개")
+
+        if not song_ids:
+            st.caption("아직 저장된 곡이 없습니다.")
+        else:
+            remove_options = []
+            for sid in song_ids:
+                song = song_lookup.get(sid, {"id": sid, "title": sid})
+                st.write("• " + song_label(song))
+                remove_options.append(sid)
+
+            remove_sid = st.selectbox(
+                "삭제할 곡 선택",
+                remove_options,
+                format_func=lambda sid: song_label(song_lookup.get(sid, {"id": sid, "title": sid})),
+                key="playlist_remove_song_id",
+            )
+
+            if st.button("선택한 곡 삭제", use_container_width=True):
+                selected_playlist["song_ids"] = [sid for sid in song_ids if sid != remove_sid]
+                selected_playlist["updated_at"] = datetime.now(timezone.utc).isoformat()
+                playlists[selected_idx] = selected_playlist
+                store["playlists"] = playlists
+                ok, msg = save_user_playlists(current_user, store, sha=sha)
+                if ok:
+                    st.success("곡을 삭제했습니다.")
+                    st.rerun()
+                else:
+                    st.error(msg)
+
 def is_valid_suno_link(url):
     url = str(url or "").strip()
 
@@ -366,7 +828,7 @@ def is_valid_suno_link(url):
         return False, f"링크 확인 중 오류: {e}"
 
 
-def queue_manual_song_url(song_url):
+def queue_manual_song_url(song_url, current_user=None):
     if not GITHUB_ACTION_TOKEN:
         return False, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
 
@@ -390,6 +852,9 @@ def queue_manual_song_url(song_url):
     columns = [
         "request_id",
         "submitted_at",
+        "submitted_by_user_key",
+        "submitted_by_email_hash",
+        "submitted_by_name",
         "url",
         "status",
         "song_id",
@@ -446,9 +911,16 @@ def queue_manual_song_url(song_url):
             if not duplicated_pending.empty:
                 return True, "이미 수집 대기열에 있는 링크입니다. 다음 업데이트 때 반영됩니다."
 
+            user_key = current_user.get("user_key", "") if current_user else ""
+            user_name = current_user.get("name", "") if current_user else ""
+            user_email_hash = email_hash(current_user.get("email", "")) if current_user else ""
+
             new_row = {
                 "request_id": str(uuid.uuid4()),
                 "submitted_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                "submitted_by_user_key": user_key,
+                "submitted_by_email_hash": user_email_hash,
+                "submitted_by_name": user_name,
                 "url": clean_url,
                 "status": "pending",
                 "song_id": "",
@@ -3415,8 +3887,11 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.04.3")
-st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
+st.title("Suno Chart v1.05 Auth")
+st.caption("Actions payload 기반 차트 + Google 로그인 사용자 기능을 제공합니다.")
+
+current_user = get_current_user()
+render_auth_box(current_user)
 
 if st.button("데이터 새로고침"):
     st.cache_data.clear()
@@ -3485,33 +3960,44 @@ if payload:
         st.markdown("### 수동 곡 추가")
 
         with st.container(border=True):
-            with st.form("manual_add_song_form", clear_on_submit=True):
-                manual_suno_url = st.text_input(
-                    "Suno song link",
-                    placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
-                    label_visibility="collapsed",
-                )
+            if not current_user:
+                st.info("Google 로그인 후 수동 곡 추가를 사용할 수 있습니다.")
+                if st.button("Google로 로그인하기", key="manual_login_button", use_container_width=True):
+                    try:
+                        st.login("google")
+                    except Exception as e:
+                        st.error(f"Google 로그인을 시작하지 못했습니다: {e}")
+            else:
+                st.caption(f"요청자: {current_user.get('name')} · 로그인 사용자만 queue에 추가할 수 있습니다.")
+                with st.form("manual_add_song_form", clear_on_submit=True):
+                    manual_suno_url = st.text_input(
+                        "Suno song link",
+                        placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
+                        label_visibility="collapsed",
+                    )
 
-                submit_col1, submit_col2 = st.columns([0.28, 0.72])
+                    submit_col1, submit_col2 = st.columns([0.28, 0.72])
 
-                with submit_col1:
-                    submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
+                    with submit_col1:
+                        submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
 
-                with submit_col2:
-                    st.caption("지원 링크: /song/... 또는 /s/...")
+                    with submit_col2:
+                        st.caption("지원 링크: /song/... 또는 /s/...")
 
-            if submitted:
-                ok, msg = is_valid_suno_link(manual_suno_url)
+                if submitted:
+                    ok, msg = is_valid_suno_link(manual_suno_url)
 
-                if not ok:
-                    st.warning(msg)
-                else:
-                    ok, msg = queue_manual_song_url(manual_suno_url)
-
-                    if ok:
-                        st.success(msg)
+                    if not ok:
+                        st.warning(msg)
                     else:
-                        st.error(msg)
+                        ok, msg = queue_manual_song_url(manual_suno_url, current_user=current_user)
+
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+
+    render_user_playlist_panel(current_user, tabs_payload)
 
     st.divider()
 
