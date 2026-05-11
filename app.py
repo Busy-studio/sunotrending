@@ -740,6 +740,20 @@ def choose_chart_key(tabs_payload, tabs_order, default_key="top200", widget_key=
     return label_to_key.get(selected_label, default_key)
 
 
+def choose_chart_key_above_ranking(tabs_payload, tabs_order, default_key="top200", widget_key="chart_view_selector"):
+    # 왼쪽 플레이어 폭만큼 빈 칸을 두고, 오른쪽 랭킹 패널 위에만 차트 선택 pill을 표시한다.
+    # 이렇게 하면 selector가 플레이리스트/플레이어 영역까지 침범하지 않는다.
+    spacer_col, chart_col = st.columns([330, 1400], gap="small")
+
+    with chart_col:
+        return choose_chart_key(
+            tabs_payload,
+            tabs_order,
+            default_key=default_key,
+            widget_key=widget_key,
+        )
+
+
 def render_selected_payload_tab(tabs_payload, tabs_order=None, default_key="top200", widget_key="chart_view_selector"):
     tabs_payload = tabs_payload or {}
     tabs_order = [key for key in (tabs_order or list(tabs_payload.keys())) if key in tabs_payload]
@@ -748,7 +762,7 @@ def render_selected_payload_tab(tabs_payload, tabs_order=None, default_key="top2
         st.info("표시할 탭 payload가 없습니다.")
         return
 
-    selected_key = choose_chart_key(
+    selected_key = choose_chart_key_above_ranking(
         tabs_payload,
         tabs_order,
         default_key=default_key if default_key in tabs_order else tabs_order[0],
@@ -3401,7 +3415,7 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.04.2")
+st.title("Suno Chart v1.04.3")
 st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
 
 if st.button("데이터 새로고침"):
@@ -3507,8 +3521,8 @@ if payload:
     if not tabs_order:
         st.info("표시할 탭 payload가 없습니다.")
     else:
-        # v1.04.2: 선택 처리는 Streamlit에서 안정적으로 하고,
-        # 스타일은 기존 HTML 내부 탭과 비슷한 빨간 pill 버튼으로 보이게 한다.
+        # v1.04.3: 선택 처리는 Streamlit에서 안정적으로 하고,
+        # selector는 왼쪽 플레이어 영역을 침범하지 않도록 오른쪽 랭킹 패널 위에만 표시한다.
         # 선택된 차트의 제목/설명은 기존 ranking 컴포넌트의 title/subtitle 자리에 표시된다.
         render_selected_payload_tab(
             tabs_payload,
