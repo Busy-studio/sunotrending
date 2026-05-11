@@ -76,23 +76,27 @@ def main():
         errors="ignore",
     )
 
-    merge_cols = [
-        "id", "current_rank", "previous_rank", "rank_change", "rank_status",
-        "current_score", "base_score", "growth_score", "freshness_score",
-        "peak_play_count_new", "peak_upvote_count_new",
-        "peak_comment_count_new", "peak_adjusted_comment_count_new",
-    ]
-
-    rank_updates = ranked.rename(columns={
-        "new_current_rank": "current_rank",
-        "previous_rank_new": "previous_rank",
-        "rank_change_new": "rank_change",
-        "rank_status_new": "rank_status",
-        "current_score_new": "current_score",
-        "base_score_new": "base_score",
-        "growth_score_new": "growth_score",
-        "freshness_score_new": "freshness_score",
-    })[merge_cols]
+    # Build a clean update frame explicitly.
+    # Do not use rename(...)[merge_cols] here: ranked already contains old columns
+    # such as current_rank/previous_rank from db, and renaming new_current_rank to
+    # current_rank can create duplicate column names. With duplicate names,
+    # db["current_rank"] returns a DataFrame instead of a Series and pandas
+    # to_numeric() fails with: TypeError: arg must be a list, tuple, 1-d array, or Series.
+    rank_updates = pd.DataFrame({
+        "id": ranked["id"].astype(str),
+        "current_rank": ranked["new_current_rank"],
+        "previous_rank": ranked["previous_rank_new"],
+        "rank_change": ranked["rank_change_new"],
+        "rank_status": ranked["rank_status_new"],
+        "current_score": ranked["current_score_new"],
+        "base_score": ranked["base_score_new"],
+        "growth_score": ranked["growth_score_new"],
+        "freshness_score": ranked["freshness_score_new"],
+        "peak_play_count_new": ranked["peak_play_count_new"],
+        "peak_upvote_count_new": ranked["peak_upvote_count_new"],
+        "peak_comment_count_new": ranked["peak_comment_count_new"],
+        "peak_adjusted_comment_count_new": ranked["peak_adjusted_comment_count_new"],
+    })
 
     db = db.merge(rank_updates, on="id", how="left")
 
