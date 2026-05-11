@@ -13,7 +13,7 @@ except Exception:
 from ranking_core import (
     PLAY_WEIGHT, LIKE_WEIGHT, COMMENT_WEIGHT, GROWTH_WEIGHT, FRESHNESS_WEIGHT,
     FRESHNESS_POWER, GROWTH_WINDOW_HOURS, MAX_AGE_DAYS,
-    add_outlier_flags, filter_active, prepare_db, prepare_history, score_songs,
+    add_outlier_flags, prepare_db, prepare_history, score_songs,
 )
 
 DATA_DIR = Path("data")
@@ -22,18 +22,37 @@ HISTORY_PATH = DATA_DIR / "suno_song_history.csv"
 PAYLOAD_PATH = DATA_DIR / "suno_app_payload.json"
 CONFIG_PATH = Path("config/rain_crew.json")
 
-TOP_N = int(os.getenv("APP_PAYLOAD_TOP_N", "200"))
-NEW_SONGS_LIMIT = int(os.getenv("APP_PAYLOAD_NEW_SONGS_LIMIT", "300"))
-RAIN_CREW_LIMIT = int(os.getenv("APP_PAYLOAD_RAIN_CREW_LIMIT", "300"))
-HISTORY_POINTS_PER_SONG = int(os.getenv("APP_PAYLOAD_HISTORY_POINTS", "80"))
+TOP_N = int(os.getenv("APP_PAYLOAD_TOP_N", os.getenv("PAYLOAD_TOP200_LIMIT", "200")))
+NEW_SONGS_LIMIT = int(os.getenv("APP_PAYLOAD_NEW_SONGS_LIMIT", os.getenv("PAYLOAD_NEW_SONGS_LIMIT", "300")))
+RAIN_CREW_LIMIT = int(os.getenv("APP_PAYLOAD_RAIN_CREW_LIMIT", os.getenv("PAYLOAD_RAIN_CREW_LIMIT", "300")))
+HISTORY_POINTS_PER_SONG = int(os.getenv("APP_PAYLOAD_HISTORY_POINTS", os.getenv("PAYLOAD_HISTORY_POINTS", "80")))
 OUTLIER_SIGMA = float(os.getenv("OUTLIER_SIGMA", "6.0"))
 OUTLIER_USE_LOG = os.getenv("OUTLIER_USE_LOG", "true").lower() in {"1", "true", "yes", "y"}
+
+TAB_LABELS = {
+    "new_songs": "New Song",
+    "top200": "Top 200",
+    "rain_crew": "☔rain crew",
+}
+
+TAB_DESCRIPTIONS = {
+    "new_songs": "생성일 기준 최신순",
+    "top200": "현재 날짜 기준 4일 이내 전체 DB 곡 중 trend_score 상위 200",
+    "rain_crew": "☔rain crew 멤버 곡 최신순",
+}
+
+
+def dedupe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df.columns.duplicated().any():
+        dupes = df.columns[df.columns.duplicated(keep=False)].tolist()
+        print(f"[app_payload] duplicate columns found, keeping last values: {dupes}")
+        return df.loc[:, ~df.columns.duplicated(keep="last")].copy()
+    return df
 
 
 def broken_score(s: str) -> int:
     if not s:
         return 999999
-
     bad_markers = [
         "Ã", "ã", "Â", "â", "ð", "Ð", "Ñ", "Î", "Ï",
         "Å", "¤", "¦", "§", "¨", "©", "ª", "«", "¬", "®", "¯", "°", "±", "²", "³",
@@ -122,7 +141,7 @@ def clean_text(value: Any) -> str:
     return s
 
 
-def safe_float(value: Any, default: float = 0.0) -> float:
+def safe_float(value: Any, default: float | None = 0.0) -> float | None:
     try:
         if value is None or pd.isna(value):
             return default
@@ -135,7 +154,10 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def safe_int(value: Any, default: int = 0) -> int:
-    return int(safe_float(value, default))
+    val = safe_float(value, default)
+    if val is None:
+        return default
+    return int(val)
 
 
 def iso_or_blank(value: Any) -> str:
@@ -293,11 +315,17 @@ def filter_rain_crew(df: pd.DataFrame) -> pd.DataFrame:
     return df[mask].copy()
 
 
-def with_rank(df: pd.DataFrame, start: int = 1) -> pd.DataFrame:
+def with_rank(df: pd.DataFrame, start: int = 1, clear_movement: bool = False) -> pd.DataFrame:
     df = df.copy().reset_index(drop=True)
-    if "rank" in df.columns:
-        df = df.drop(columns=["rank"])
+    df = df.drop(columns=["rank"], errors="ignore")
     df.insert(0, "rank", range(start, start + len(df)))
+
+    # New Song / rain crew의 rank는 단순 리스트 번호다.
+    # 기존 Top 200 movement가 섞이면 오해되므로 non-ranking 탭에서는 숨긴다.
+    if clear_movement:
+        for col in ["rank_change", "rank_status", "previous_rank", "current_rank"]:
+            if col in df.columns:
+                df[col] = pd.NA if col != "rank_status" else ""
     return df
 
 
@@ -312,6 +340,58 @@ def make_tab(df: pd.DataFrame, hist: pd.DataFrame, title: str, description: str)
     }
 
 
+def require_valid_created_at(df: pd.DataFrame) -> pd.DataFrame:
+    """Top 200/New Song 후보군은 현재 시각 기준 4일 이내 생성곡만 사용한다."""
+    if "created_at" not in df.columns:
+        return df.iloc[0:0].copy()
+    created = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
+    return df[created.notna()].copy()
+
+
+def build_active_candidates(scored: pd.DataFrame) -> tuple[pd.DataFrame, pd.Timestamp]:
+    """Return every DB song created within the last MAX_AGE_DAYS days.
+
+    중요: Top 200은 New Song 일부에서 파생하지 않고, 이 active 전체를 후보군으로 삼는다.
+    """
+    view = require_valid_created_at(scored)
+    now = pd.Timestamp.now(tz="UTC")
+    cutoff = now - pd.Timedelta(days=MAX_AGE_DAYS)
+    active = view[view["created_at"] >= cutoff].copy()
+    return active, cutoff
+
+
+def print_candidate_debug(db: pd.DataFrame, active: pd.DataFrame, top200: pd.DataFrame, cutoff: pd.Timestamp) -> None:
+    print(f"[app_payload] db_rows={len(db)}")
+    print(f"[app_payload] created_at_valid={int(pd.to_datetime(db.get('created_at'), errors='coerce', utc=True).notna().sum()) if 'created_at' in db.columns else 0}/{len(db)}")
+    print(f"[app_payload] cutoff_utc={cutoff.isoformat()}")
+    print(f"[app_payload] active_4d_rows={len(active)}")
+    print(f"[app_payload] top200_rows={len(top200)}")
+
+    if active.empty:
+        print("[app_payload] active candidate set is empty")
+        return
+
+    sample_cols = [
+        "title", "handle", "created_at", "play_count", "upvote_count", "comment_count",
+        "trend_score", "base_score", "growth_score", "freshness_score", "age_hours",
+    ]
+    sample_cols = [c for c in sample_cols if c in active.columns]
+
+    print("[app_payload] top20_by_trend_score:")
+    print(active.sort_values(["trend_score", "created_at"], ascending=[False, False], na_position="last")[sample_cols].head(20).to_string(index=False))
+
+    top200_ids = set(top200["id"].astype(str)) if "id" in top200.columns else set()
+    for metric in ["play_count", "upvote_count", "comment_count"]:
+        if metric not in active.columns:
+            continue
+        metric_top = active.sort_values(metric, ascending=False, na_position="last").head(20).copy()
+        metric_top["in_top200"] = metric_top["id"].astype(str).isin(top200_ids) if "id" in metric_top.columns else False
+        cols = ["in_top200"] + sample_cols
+        cols = [c for c in cols if c in metric_top.columns]
+        print(f"[app_payload] top20_by_{metric}:")
+        print(metric_top[cols].to_string(index=False))
+
+
 def main() -> None:
     if not DB_PATH.exists():
         raise FileNotFoundError(f"Missing {DB_PATH}")
@@ -319,35 +399,49 @@ def main() -> None:
     db = pd.read_csv(DB_PATH)
     hist = pd.read_csv(HISTORY_PATH) if HISTORY_PATH.exists() else pd.DataFrame()
 
-    db = prepare_db(db)
-    hist = prepare_history(hist)
+    db = dedupe_columns(prepare_db(dedupe_columns(db)))
+    hist = prepare_history(dedupe_columns(hist)) if not hist.empty else pd.DataFrame()
 
-    scored = score_songs(db, hist)
-    active = filter_active(scored, max_age_days=MAX_AGE_DAYS)
+    # 1) 전체 DB를 먼저 점수화한다.
+    scored = dedupe_columns(score_songs(db, hist))
+
+    # 2) 현재 시각 기준 4일 이내 생성곡 전체를 Top 200 후보군으로 삼는다.
+    active, cutoff = build_active_candidates(scored)
     active = add_outlier_flags(active, sigma=OUTLIER_SIGMA, use_log=OUTLIER_USE_LOG)
 
+    # 3) 각 탭은 모두 active 전체에서 독립적으로 만든다. Top 200은 New Song에서 파생하지 않는다.
     new_songs_df = with_rank(
-        active.sort_values("created_at", ascending=False, na_position="last").head(NEW_SONGS_LIMIT)
+        active.sort_values("created_at", ascending=False, na_position="last").head(NEW_SONGS_LIMIT),
+        clear_movement=True,
     )
+
     top200_df = with_rank(
-        active.sort_values("trend_score", ascending=False, na_position="last").head(TOP_N)
+        active.sort_values(["trend_score", "created_at"], ascending=[False, False], na_position="last").head(TOP_N),
+        clear_movement=False,
     )
+
     rain_crew_df = with_rank(
-        filter_rain_crew(active).sort_values("created_at", ascending=False, na_position="last").head(RAIN_CREW_LIMIT)
+        filter_rain_crew(active).sort_values("created_at", ascending=False, na_position="last").head(RAIN_CREW_LIMIT),
+        clear_movement=True,
     )
 
     newest_created = db["created_at"].max() if "created_at" in db.columns else pd.NaT
     last_checked = db["last_checked_at"].max() if "last_checked_at" in db.columns else pd.NaT
 
+    print_candidate_debug(db, active, top200_df, cutoff)
+
     payload = {
-        "version": 1,
+        "version": 2,
         "meta": {
             "generated_at": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
+            "candidate_rule": f"valid created_at >= generated_at - {MAX_AGE_DAYS} days",
+            "top200_rule": "score every active 4-day DB song, sort by trend_score desc, then created_at desc, then take top N",
             "active_song_count": int(len(active)),
             "db_song_count": int(len(db)),
             "history_row_count": int(len(hist)),
             "newest_created_at": display_time(newest_created),
             "last_checked_at": display_time(last_checked),
+            "cutoff_utc": cutoff.isoformat(),
             "max_age_days": MAX_AGE_DAYS,
             "top_n": TOP_N,
             "ranking": {
@@ -360,10 +454,11 @@ def main() -> None:
                 "growth_window_hours": GROWTH_WINDOW_HOURS,
             },
         },
+        "tabs_order": ["new_songs", "top200", "rain_crew"],
         "tabs": {
-            "new_songs": make_tab(new_songs_df, hist, "New Song", "생성일 기준 최신순"),
-            "top200": make_tab(top200_df, hist, "Top 200", "최근 4일 이내 곡 중 trend_score 상위 200"),
-            "rain_crew": make_tab(rain_crew_df, hist, "Rain Crew", "Rain Crew 설정에 포함된 크리에이터 곡 최신순"),
+            "new_songs": make_tab(new_songs_df, hist, TAB_LABELS["new_songs"], TAB_DESCRIPTIONS["new_songs"]),
+            "top200": make_tab(top200_df, hist, TAB_LABELS["top200"], TAB_DESCRIPTIONS["top200"]),
+            "rain_crew": make_tab(rain_crew_df, hist, TAB_LABELS["rain_crew"], TAB_DESCRIPTIONS["rain_crew"]),
         },
     }
 
