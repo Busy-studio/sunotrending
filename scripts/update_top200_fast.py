@@ -5,10 +5,17 @@ import random
 import math
 import requests
 import pandas as pd
+from update_public_song_pages import (
+    get_archive_columns,
+    load_history_for_archive,
+    score_songs_for_archive,
+    archive_expired_songs,
+)
 from datetime import datetime, timezone
 
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
+ARCHIVE_PATH = "data/suno_song_archive.csv"
 
 REQUEST_SLEEP_SECONDS = float(os.getenv("REQUEST_SLEEP_SECONDS", "0.5"))
 TOP_N_FAST_UPDATE = int(os.getenv("TOP_N_FAST_UPDATE", "200"))
@@ -62,6 +69,13 @@ def ensure_data_files():
             "checked_at", "id", "title", "handle", "created_at",
             "play_count", "upvote_count", "comment_count", "flag_count",
         ]).to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")
+
+    if not os.path.exists(ARCHIVE_PATH):
+        pd.DataFrame(columns=get_archive_columns()).to_csv(
+            ARCHIVE_PATH,
+            index=False,
+            encoding="utf-8-sig",
+        )
 
 
 def extract_balanced_json_object(text, start_index):
@@ -444,19 +458,27 @@ def prune_old_songs_and_history(final_db):
     cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=SONG_RETENTION_DAYS)
 
     before = len(final_db)
+    expired_mask = final_db["created_at_dt"].notna() & (final_db["created_at_dt"] < cutoff)
+    expired_db = final_db[expired_mask].copy()
+    active_db = final_db[~expired_mask].copy()
 
-    final_db = final_db[
-        final_db["created_at_dt"].isna()
-        | (final_db["created_at_dt"] >= cutoff)
-    ].copy()
+    if not expired_db.empty:
+        hist_for_archive = load_history_for_archive()
+        scored_db = score_songs_for_archive(
+            final_db.drop(columns=["created_at_dt"], errors="ignore"),
+            hist_for_archive,
+        )
+        archive_expired_songs(
+            expired_db.drop(columns=["created_at_dt"], errors="ignore"),
+            scored_db,
+        )
 
-    kept_ids = set(final_db["id"].dropna().astype(str))
-
-    final_db = final_db.drop(columns=["created_at_dt"], errors="ignore")
+    kept_ids = set(active_db["id"].dropna().astype(str))
+    active_db = active_db.drop(columns=["created_at_dt"], errors="ignore")
 
     print(
         f"[prune] SONG_RETENTION_DAYS={SONG_RETENTION_DAYS}, "
-        f"before={before}, after={len(final_db)}, removed={before - len(final_db)}"
+        f"before={before}, after={len(active_db)}, archived_removed_from_active={before - len(active_db)}"
     )
 
     if os.path.exists(HISTORY_PATH):
@@ -475,7 +497,7 @@ def prune_old_songs_and_history(final_db):
                 f"after={len(hist)}, removed={before_hist - len(hist)}"
             )
 
-    return final_db
+    return active_db
 
 
 def append_history(history_rows, final_db):

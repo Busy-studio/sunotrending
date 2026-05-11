@@ -5,8 +5,10 @@ from secure_csv import encrypt_file_to_zip
 DATA_DIR = "data"
 DB_CSV = os.path.join(DATA_DIR, "suno_song_db.csv")
 HISTORY_CSV = os.path.join(DATA_DIR, "suno_song_history.csv")
+ARCHIVE_CSV = os.path.join(DATA_DIR, "suno_song_archive.csv")
 DB_ZIP = os.path.join(DATA_DIR, "suno_song_db.zip")
 HISTORY_ZIP = os.path.join(DATA_DIR, "suno_song_history.zip")
+ARCHIVE_ZIP = os.path.join(DATA_DIR, "suno_song_archive.zip")
 
 
 def ensure_default_csvs() -> None:
@@ -28,6 +30,23 @@ def ensure_default_csvs() -> None:
             "play_count", "upvote_count", "comment_count", "flag_count",
         ]).to_csv(HISTORY_CSV, index=False, encoding="utf-8-sig")
 
+    if not os.path.exists(ARCHIVE_CSV):
+        pd.DataFrame(columns=[
+            "archived_at", "archive_reason",
+            "id", "title", "handle", "display_name", "user_id",
+            "created_at", "first_seen_at", "last_checked_at",
+            "play_count", "upvote_count", "comment_count", "adjusted_comment_count",
+            "comment_quality_ratio", "meaningful_count", "generic_count",
+            "mention_only_count", "emoji_only_count", "flag_count",
+            "final_rank", "best_rank",
+            "final_trend_score", "final_base_score", "final_growth_score", "final_freshness_score",
+            "best_trend_score", "best_score_at",
+            "peak_play_count", "peak_upvote_count", "peak_comment_count", "peak_adjusted_comment_count",
+            "model", "major_model_version", "display_tags", "duration",
+            "lyrics", "prompt", "gpt_description_prompt",
+            "song_url", "audio_url", "image_url", "source",
+        ]).to_csv(ARCHIVE_CSV, index=False, encoding="utf-8-sig")
+
 
 def main() -> None:
     password = os.getenv("DATA_ZIP_PASSWORD")
@@ -38,9 +57,11 @@ def main() -> None:
 
     encrypt_file_to_zip(DB_CSV, DB_ZIP, password)
     encrypt_file_to_zip(HISTORY_CSV, HISTORY_ZIP, password)
+    encrypt_file_to_zip(ARCHIVE_CSV, ARCHIVE_ZIP, password)
 
     print(f"Encrypted {DB_CSV} -> {DB_ZIP}")
     print(f"Encrypted {HISTORY_CSV} -> {HISTORY_ZIP}")
+    print(f"Encrypted {ARCHIVE_CSV} -> {ARCHIVE_ZIP}")
 
 
 if __name__ == "__main__":

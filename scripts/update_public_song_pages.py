@@ -2,12 +2,14 @@ import os
 import json
 import time
 import random
+import math
 import requests
 import pandas as pd
 from datetime import datetime, timezone
 
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
+ARCHIVE_PATH = "data/suno_song_archive.csv"
 
 REQUEST_SLEEP_SECONDS = float(os.getenv("REQUEST_SLEEP_SECONDS", "1.2"))
 MAX_UPDATE_ROWS = int(os.getenv("MAX_UPDATE_ROWS", "1000"))
@@ -16,8 +18,16 @@ MAX_UPDATE_ROWS = int(os.getenv("MAX_UPDATE_ROWS", "1000"))
 NEW_SONGS_PAGES = int(os.getenv("NEW_SONGS_PAGES", "3"))
 NEW_SONGS_PAGE_SIZE = int(os.getenv("NEW_SONGS_PAGE_SIZE", "50"))
 
-# 단기 트렌딩용: Suno created_at 기준 N일 지난 곡은 DB/history에서 삭제
+# 단기 트렌딩용: Suno created_at 기준 N일 지난 곡은 active DB/history에서 제외하고 archive에 보존
 SONG_RETENTION_DAYS = int(os.getenv("SONG_RETENTION_DAYS", "4"))
+RETENTION_HOURS = SONG_RETENTION_DAYS * 24
+GROWTH_WINDOW_HOURS = int(os.getenv("GROWTH_WINDOW_HOURS", "3"))
+PLAY_WEIGHT = float(os.getenv("PLAY_WEIGHT", "1.0"))
+LIKE_WEIGHT = float(os.getenv("LIKE_WEIGHT", "3.0"))
+COMMENT_WEIGHT = float(os.getenv("COMMENT_WEIGHT", "4.0"))
+GROWTH_WEIGHT = float(os.getenv("GROWTH_WEIGHT", "1.5"))
+FRESHNESS_WEIGHT = float(os.getenv("FRESHNESS_WEIGHT", "35.0"))
+FRESHNESS_POWER = float(os.getenv("FRESHNESS_POWER", "1.35"))
 
 if NEW_SONGS_PAGE_SIZE > 50:
     NEW_SONGS_PAGE_SIZE = 50
@@ -74,6 +84,31 @@ def ensure_data_files():
             "checked_at", "id", "title", "handle", "created_at",
             "play_count", "upvote_count", "comment_count", "flag_count",
         ]).to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")
+
+    if not os.path.exists(ARCHIVE_PATH):
+        pd.DataFrame(columns=get_archive_columns()).to_csv(
+            ARCHIVE_PATH,
+            index=False,
+            encoding="utf-8-sig",
+        )
+
+
+def get_archive_columns():
+    return [
+        "archived_at", "archive_reason",
+        "id", "title", "handle", "display_name", "user_id",
+        "created_at", "first_seen_at", "last_checked_at",
+        "play_count", "upvote_count", "comment_count", "adjusted_comment_count",
+        "comment_quality_ratio", "meaningful_count", "generic_count",
+        "mention_only_count", "emoji_only_count", "flag_count",
+        "final_rank", "best_rank",
+        "final_trend_score", "final_base_score", "final_growth_score", "final_freshness_score",
+        "best_trend_score", "best_score_at",
+        "peak_play_count", "peak_upvote_count", "peak_comment_count", "peak_adjusted_comment_count",
+        "model", "major_model_version", "display_tags", "duration",
+        "lyrics", "prompt", "gpt_description_prompt",
+        "song_url", "audio_url", "image_url", "source",
+    ]
 
 
 def is_blank_value(value):
@@ -671,6 +706,207 @@ def choose_rows_to_update(db):
     return out.head(MAX_UPDATE_ROWS).copy()
 
 
+def to_number(series):
+    return pd.to_numeric(series, errors="coerce").fillna(0)
+
+
+def load_history_for_archive():
+    if not os.path.exists(HISTORY_PATH):
+        return pd.DataFrame()
+
+    hist = pd.read_csv(HISTORY_PATH)
+    if hist.empty:
+        return hist
+
+    if "id" in hist.columns:
+        hist["id"] = hist["id"].astype(str)
+    if "checked_at" in hist.columns:
+        hist["checked_at"] = pd.to_datetime(hist["checked_at"], errors="coerce", utc=True)
+
+    for col in ["play_count", "upvote_count", "comment_count"]:
+        if col in hist.columns:
+            hist[col] = to_number(hist[col])
+
+    return hist
+
+
+def add_growth_features_for_archive(db, hist, window_hours):
+    db = db.copy()
+
+    for col in ["play_delta_window", "upvote_delta_window", "comment_delta_window"]:
+        db[col] = 0.0
+
+    if hist.empty or "id" not in hist.columns or "checked_at" not in hist.columns:
+        return db
+
+    now = pd.Timestamp.now(tz="UTC")
+    cutoff = now - pd.Timedelta(hours=window_hours)
+    recent = hist[hist["checked_at"] >= cutoff].copy()
+    if recent.empty:
+        return db
+
+    rows = []
+    for song_id, g in recent.groupby("id"):
+        g = g.sort_values("checked_at")
+        if len(g) < 2:
+            continue
+        first = g.iloc[0]
+        last = g.iloc[-1]
+        rows.append({
+            "id": str(song_id),
+            "play_delta_window": max(0, float(last.get("play_count", 0)) - float(first.get("play_count", 0))),
+            "upvote_delta_window": max(0, float(last.get("upvote_count", 0)) - float(first.get("upvote_count", 0))),
+            "comment_delta_window": max(0, float(last.get("comment_count", 0)) - float(first.get("comment_count", 0))),
+        })
+
+    if not rows:
+        return db
+
+    growth = pd.DataFrame(rows)
+    db = db.merge(growth, on="id", how="left", suffixes=("", "_growth"))
+
+    for col in ["play_delta_window", "upvote_delta_window", "comment_delta_window"]:
+        growth_col = f"{col}_growth"
+        if growth_col in db.columns:
+            db[col] = db[growth_col].fillna(db[col])
+            db = db.drop(columns=[growth_col], errors="ignore")
+        db[col] = db[col].fillna(0)
+
+    return db
+
+
+def score_songs_for_archive(db, hist):
+    view = db.copy()
+    now = pd.Timestamp.now(tz="UTC")
+
+    if "id" in view.columns:
+        view["id"] = view["id"].astype(str)
+
+    if "created_at" not in view.columns:
+        view["created_at"] = pd.NaT
+    view["created_at_dt"] = pd.to_datetime(view["created_at"], errors="coerce", utc=True)
+
+    view["age_hours"] = (now - view["created_at_dt"]).dt.total_seconds() / 3600
+    view["age_hours"] = view["age_hours"].clip(lower=0)
+    view["remaining_hours"] = (RETENTION_HOURS - view["age_hours"]).clip(lower=0)
+    view["freshness"] = (view["remaining_hours"] / RETENTION_HOURS).clip(lower=0, upper=1)
+    view["freshness_score"] = (view["freshness"] ** FRESHNESS_POWER) * FRESHNESS_WEIGHT
+
+    view = add_growth_features_for_archive(view, hist, GROWTH_WINDOW_HOURS)
+
+    for col in ["play_count", "upvote_count", "comment_count"]:
+        if col not in view.columns:
+            view[col] = 0
+        view[col] = to_number(view[col])
+
+    if "adjusted_comment_count" in view.columns:
+        view["effective_comment_count"] = pd.to_numeric(view["adjusted_comment_count"], errors="coerce")
+        view["effective_comment_count"] = view["effective_comment_count"].fillna(view["comment_count"])
+    else:
+        view["effective_comment_count"] = view["comment_count"]
+
+    view["effective_comment_count"] = view["effective_comment_count"].clip(lower=0)
+
+    view["base_score"] = (
+        PLAY_WEIGHT * view["play_count"].apply(lambda x: math.log1p(max(0, x)))
+        + LIKE_WEIGHT * view["upvote_count"].apply(lambda x: math.log1p(max(0, x)))
+        + COMMENT_WEIGHT * view["effective_comment_count"].apply(lambda x: math.log1p(max(0, x)))
+    )
+
+    view["growth_score_raw"] = (
+        0.4 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+        + 2.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+        + 3.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+    )
+    view["growth_score"] = view["growth_score_raw"] * GROWTH_WEIGHT
+    view["trend_score"] = view["base_score"] + view["growth_score"] + view["freshness_score"]
+
+    ranked = view.sort_values("trend_score", ascending=False, na_position="last").copy()
+    ranked["computed_rank"] = range(1, len(ranked) + 1)
+
+    return ranked
+
+
+def archive_expired_songs(expired_db, scored_db):
+    if expired_db.empty:
+        return
+
+    archive_now = now_iso()
+    expired = expired_db.copy()
+    expired["id"] = expired["id"].astype(str)
+
+    scored_cols = [
+        "id", "computed_rank", "trend_score", "base_score", "growth_score", "freshness_score",
+    ]
+    scored_lookup = scored_db[[c for c in scored_cols if c in scored_db.columns]].copy()
+    if "id" in scored_lookup.columns:
+        scored_lookup["id"] = scored_lookup["id"].astype(str)
+        expired = expired.merge(scored_lookup, on="id", how="left")
+
+    archive = expired.copy()
+    archive["archived_at"] = archive_now
+    archive["archive_reason"] = f"older_than_{SONG_RETENTION_DAYS}d"
+
+    archive["final_rank"] = pd.to_numeric(archive.get("computed_rank"), errors="coerce")
+    if "current_rank" in archive.columns:
+        archive["final_rank"] = archive["final_rank"].fillna(pd.to_numeric(archive["current_rank"], errors="coerce"))
+
+    archive["final_trend_score"] = pd.to_numeric(archive.get("trend_score"), errors="coerce")
+    archive["final_base_score"] = pd.to_numeric(archive.get("base_score"), errors="coerce")
+    archive["final_growth_score"] = pd.to_numeric(archive.get("growth_score"), errors="coerce")
+    archive["final_freshness_score"] = pd.to_numeric(archive.get("freshness_score"), errors="coerce")
+
+    if "best_rank" in archive.columns:
+        archive["best_rank"] = pd.to_numeric(archive["best_rank"], errors="coerce")
+        archive["best_rank"] = archive[["best_rank", "final_rank"]].min(axis=1, skipna=True)
+    else:
+        archive["best_rank"] = archive["final_rank"]
+
+    if "best_trend_score" in archive.columns:
+        archive["best_trend_score"] = pd.to_numeric(archive["best_trend_score"], errors="coerce")
+        archive["best_trend_score"] = archive[["best_trend_score", "final_trend_score"]].max(axis=1, skipna=True)
+    else:
+        archive["best_trend_score"] = archive["final_trend_score"]
+
+    if "best_score_at" not in archive.columns:
+        archive["best_score_at"] = ""
+    archive["best_score_at"] = archive["best_score_at"].fillna(archive_now)
+    archive.loc[archive["best_score_at"].astype(str).str.strip().isin(["", "nan", "NaT", "None"]), "best_score_at"] = archive_now
+
+    peak_pairs = {
+        "peak_play_count": "play_count",
+        "peak_upvote_count": "upvote_count",
+        "peak_comment_count": "comment_count",
+        "peak_adjusted_comment_count": "adjusted_comment_count",
+    }
+    for peak_col, current_col in peak_pairs.items():
+        current = pd.to_numeric(archive[current_col], errors="coerce") if current_col in archive.columns else pd.Series([pd.NA] * len(archive))
+        if peak_col in archive.columns:
+            prior = pd.to_numeric(archive[peak_col], errors="coerce")
+            archive[peak_col] = pd.concat([prior, current], axis=1).max(axis=1, skipna=True)
+        else:
+            archive[peak_col] = current
+
+    for col in get_archive_columns():
+        if col not in archive.columns:
+            archive[col] = pd.NA
+
+    archive = archive[get_archive_columns()].copy()
+
+    if os.path.exists(ARCHIVE_PATH):
+        old = pd.read_csv(ARCHIVE_PATH)
+    else:
+        old = pd.DataFrame(columns=get_archive_columns())
+
+    combined = pd.concat([old, archive], ignore_index=True)
+    if "id" in combined.columns:
+        combined["id"] = combined["id"].astype(str)
+        combined = combined.drop_duplicates(subset=["id"], keep="last")
+
+    combined.to_csv(ARCHIVE_PATH, index=False, encoding="utf-8-sig")
+    print(f"[archive] archived={len(archive)}, archive_rows={len(combined)} -> {ARCHIVE_PATH}")
+
+
 def prune_old_songs_and_history(final_db):
     if SONG_RETENTION_DAYS <= 0:
         return final_db
@@ -689,21 +925,24 @@ def prune_old_songs_and_history(final_db):
     cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=SONG_RETENTION_DAYS)
 
     before = len(final_db)
+    expired_mask = final_db["created_at_dt"].notna() & (final_db["created_at_dt"] < cutoff)
+    expired_db = final_db[expired_mask].copy()
+    active_db = final_db[~expired_mask].copy()
 
-    final_db = final_db[
-        final_db["created_at_dt"].isna()
-        | (final_db["created_at_dt"] >= cutoff)
-    ].copy()
+    if not expired_db.empty:
+        hist_for_archive = load_history_for_archive()
+        scored_db = score_songs_for_archive(final_db.drop(columns=["created_at_dt"], errors="ignore"), hist_for_archive)
+        archive_expired_songs(expired_db.drop(columns=["created_at_dt"], errors="ignore"), scored_db)
 
-    kept_ids = set(final_db["id"].dropna().astype(str))
+    kept_ids = set(active_db["id"].dropna().astype(str))
 
-    final_db = final_db.drop(columns=["created_at_dt"], errors="ignore")
+    active_db = active_db.drop(columns=["created_at_dt"], errors="ignore")
 
-    removed = before - len(final_db)
+    removed = before - len(active_db)
 
     print(
         f"[prune] SONG_RETENTION_DAYS={SONG_RETENTION_DAYS}, "
-        f"before={before}, after={len(final_db)}, removed={removed}"
+        f"before={before}, after={len(active_db)}, archived_removed_from_active={removed}"
     )
 
     if os.path.exists(HISTORY_PATH):
@@ -722,7 +961,7 @@ def prune_old_songs_and_history(final_db):
                 f"after={len(hist)}, removed={before_hist - len(hist)}"
             )
 
-    return final_db
+    return active_db
 
 
 def detail_field_report(db):

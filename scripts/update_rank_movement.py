@@ -180,9 +180,9 @@ def score_songs(db, hist):
     )
 
     view["growth_score_raw"] = (
-        1.2 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 5.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 8.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+        0.4 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+        + 2.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
+        + 3.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
     )
 
     view["growth_score"] = view["growth_score_raw"] * GROWTH_WEIGHT
@@ -192,7 +192,11 @@ def score_songs(db, hist):
     ranked = ranked.reset_index(drop=True)
     ranked["new_current_rank"] = range(1, len(ranked) + 1)
 
-    return ranked[["id", "new_current_rank"]]
+    return ranked[[
+        "id", "new_current_rank",
+        "trend_score", "base_score", "growth_score", "freshness_score",
+        "play_count", "upvote_count", "comment_count", "effective_comment_count",
+    ]]
 
 
 def main():
@@ -240,12 +244,25 @@ def main():
 
     ranked["rank_status_new"] = ranked.apply(get_rank_status, axis=1)
 
+    ranked["current_score_new"] = ranked["trend_score"]
+    ranked["base_score_new"] = ranked["base_score"]
+    ranked["growth_score_new"] = ranked["growth_score"]
+    ranked["freshness_score_new"] = ranked["freshness_score"]
+    ranked["peak_play_count_new"] = ranked["play_count"]
+    ranked["peak_upvote_count_new"] = ranked["upvote_count"]
+    ranked["peak_comment_count_new"] = ranked["comment_count"]
+    ranked["peak_adjusted_comment_count_new"] = ranked["effective_comment_count"]
+
     db = db.drop(
         columns=[
             "previous_rank",
             "current_rank",
             "rank_change",
             "rank_status",
+            "current_score",
+            "base_score",
+            "growth_score",
+            "freshness_score",
         ],
         errors="ignore",
     )
@@ -257,10 +274,59 @@ def main():
                 "previous_rank_new": "previous_rank",
                 "rank_change_new": "rank_change",
                 "rank_status_new": "rank_status",
+                "current_score_new": "current_score",
+                "base_score_new": "base_score",
+                "growth_score_new": "growth_score",
+                "freshness_score_new": "freshness_score",
             }
-        ),
+        )[[
+            "id",
+            "current_rank", "previous_rank", "rank_change", "rank_status",
+            "current_score", "base_score", "growth_score", "freshness_score",
+            "peak_play_count_new", "peak_upvote_count_new",
+            "peak_comment_count_new", "peak_adjusted_comment_count_new",
+        ]],
         on="id",
         how="left",
+    )
+
+    now_text = pd.Timestamp.now(tz="UTC").isoformat()
+
+    for col in [
+        "best_rank", "best_trend_score", "best_score_at",
+        "peak_play_count", "peak_upvote_count", "peak_comment_count", "peak_adjusted_comment_count",
+    ]:
+        if col not in db.columns:
+            db[col] = pd.NA
+
+    db["best_rank"] = pd.concat([
+        pd.to_numeric(db["best_rank"], errors="coerce"),
+        pd.to_numeric(db["current_rank"], errors="coerce"),
+    ], axis=1).min(axis=1, skipna=True)
+
+    old_best_score = pd.to_numeric(db["best_trend_score"], errors="coerce")
+    current_score = pd.to_numeric(db["current_score"], errors="coerce")
+    improved_mask = current_score.notna() & (old_best_score.isna() | (current_score > old_best_score))
+    db["best_trend_score"] = pd.concat([old_best_score, current_score], axis=1).max(axis=1, skipna=True)
+    db.loc[improved_mask, "best_score_at"] = now_text
+
+    for peak_col, new_col in [
+        ("peak_play_count", "peak_play_count_new"),
+        ("peak_upvote_count", "peak_upvote_count_new"),
+        ("peak_comment_count", "peak_comment_count_new"),
+        ("peak_adjusted_comment_count", "peak_adjusted_comment_count_new"),
+    ]:
+        db[peak_col] = pd.concat([
+            pd.to_numeric(db[peak_col], errors="coerce"),
+            pd.to_numeric(db[new_col], errors="coerce"),
+        ], axis=1).max(axis=1, skipna=True)
+
+    db = db.drop(
+        columns=[
+            "peak_play_count_new", "peak_upvote_count_new",
+            "peak_comment_count_new", "peak_adjusted_comment_count_new",
+        ],
+        errors="ignore",
     )
 
     db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
