@@ -6,7 +6,6 @@ import time
 import requests
 import base64
 import uuid
-import hashlib
 from io import StringIO
 import pandas as pd
 import streamlit as st
@@ -367,103 +366,7 @@ def is_valid_suno_link(url):
         return False, f"링크 확인 중 오류: {e}"
 
 
-
-# ================================
-# Auth helpers
-# ================================
-
-def secret_value(path, default=""):
-    try:
-        cur = st.secrets
-        for part in path.split("."):
-            if hasattr(cur, "get"):
-                cur = cur.get(part, {})
-            else:
-                cur = cur[part]
-        if cur is None or isinstance(cur, dict):
-            return default
-        return str(cur)
-    except Exception:
-        return default
-
-
-def looks_like_placeholder(value):
-    s = str(value or "").strip()
-    if not s:
-        return True
-    lowered = s.lower()
-    bad_bits = [
-        "...", "xxxx", "your_", "직접_", "랜덤", "python으로", "google_client", "client_secret",
-    ]
-    return any(bit in lowered for bit in bad_bits)
-
-
-def auth_login_available():
-    redirect_uri = secret_value("auth.redirect_uri")
-    cookie_secret = secret_value("auth.cookie_secret")
-    client_id = secret_value("auth.google.client_id")
-    client_secret = secret_value("auth.google.client_secret")
-    metadata_url = secret_value("auth.google.server_metadata_url")
-
-    required = [redirect_uri, cookie_secret, client_id, client_secret, metadata_url]
-    return all(not looks_like_placeholder(x) for x in required) and hasattr(st, "login") and hasattr(st, "logout")
-
-
-def get_current_user():
-    try:
-        user = getattr(st, "user", None)
-        if not user:
-            return None
-
-        is_logged_in = bool(getattr(user, "is_logged_in", False))
-        if not is_logged_in:
-            return None
-
-        email = str(getattr(user, "email", "") or "").strip().lower()
-        name = str(getattr(user, "name", "") or "").strip()
-        picture = str(getattr(user, "picture", "") or "").strip()
-
-        if not email:
-            return None
-
-        email_hash = hashlib.sha256(email.encode("utf-8")).hexdigest()
-        user_key = email_hash[:16]
-
-        return {
-            "email": email,
-            "email_hash": email_hash,
-            "user_key": user_key,
-            "name": name or email.split("@")[0],
-            "picture": picture,
-        }
-    except Exception:
-        return None
-
-
-def render_account_sidebar(current_user):
-    with st.sidebar:
-        st.markdown("### Account")
-
-        if current_user:
-            st.success(f"로그인됨: {current_user.get('name', '')}")
-            st.caption(current_user.get("email", ""))
-            if st.button("로그아웃", use_container_width=True):
-                try:
-                    st.logout()
-                except Exception as e:
-                    st.error(f"로그아웃 실패: {e}")
-            return
-
-        if auth_login_available():
-            if st.button("Google로 로그인", use_container_width=True):
-                try:
-                    st.login("google")
-                except Exception as e:
-                    st.error(f"Google 로그인을 시작하지 못했습니다: {e}")
-        else:
-            st.info("Google 로그인 설정 대기중입니다. 차트는 계속 사용할 수 있습니다.")
-
-def queue_manual_song_url(song_url, current_user=None):
+def queue_manual_song_url(song_url):
     if not GITHUB_ACTION_TOKEN:
         return False, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
 
@@ -487,9 +390,6 @@ def queue_manual_song_url(song_url, current_user=None):
     columns = [
         "request_id",
         "submitted_at",
-        "submitted_by_user_key",
-        "submitted_by_email_hash",
-        "submitted_by_name",
         "url",
         "status",
         "song_id",
@@ -549,9 +449,6 @@ def queue_manual_song_url(song_url, current_user=None):
             new_row = {
                 "request_id": str(uuid.uuid4()),
                 "submitted_at": pd.Timestamp.now(tz="UTC").isoformat(),
-                "submitted_by_user_key": (current_user or {}).get("user_key", ""),
-                "submitted_by_email_hash": (current_user or {}).get("email_hash", ""),
-                "submitted_by_name": (current_user or {}).get("name", ""),
                 "url": clean_url,
                 "status": "pending",
                 "song_id": "",
@@ -3518,11 +3415,8 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.05.4 Auth Stable")
+st.title("Suno Chart v1.04.3")
 st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
-
-current_user = get_current_user()
-render_account_sidebar(current_user)
 
 if st.button("데이터 새로고침"):
     st.cache_data.clear()
@@ -3591,45 +3485,33 @@ if payload:
         st.markdown("### 수동 곡 추가")
 
         with st.container(border=True):
-            if not current_user:
-                if auth_login_available():
-                    st.info("Google 로그인 후 수동 곡 추가를 사용할 수 있습니다.")
-                    if st.button("Google로 로그인하기", key="manual_login_button", use_container_width=True):
-                        try:
-                            st.login("google")
-                        except Exception as e:
-                            st.error(f"Google 로그인을 시작하지 못했습니다: {e}")
+            with st.form("manual_add_song_form", clear_on_submit=True):
+                manual_suno_url = st.text_input(
+                    "Suno song link",
+                    placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
+                    label_visibility="collapsed",
+                )
+
+                submit_col1, submit_col2 = st.columns([0.28, 0.72])
+
+                with submit_col1:
+                    submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
+
+                with submit_col2:
+                    st.caption("지원 링크: /song/... 또는 /s/...")
+
+            if submitted:
+                ok, msg = is_valid_suno_link(manual_suno_url)
+
+                if not ok:
+                    st.warning(msg)
                 else:
-                    st.info("Google 로그인 설정이 완료되면 수동 곡 추가를 사용할 수 있습니다.")
-            else:
-                st.caption(f"요청자: {current_user.get('name', '')} · 로그인 사용자만 queue에 추가할 수 있습니다.")
-                with st.form("manual_add_song_form", clear_on_submit=True):
-                    manual_suno_url = st.text_input(
-                        "Suno song link",
-                        placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
-                        label_visibility="collapsed",
-                    )
+                    ok, msg = queue_manual_song_url(manual_suno_url)
 
-                    submit_col1, submit_col2 = st.columns([0.28, 0.72])
-
-                    with submit_col1:
-                        submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
-
-                    with submit_col2:
-                        st.caption("지원 링크: /song/... 또는 /s/...")
-
-                if submitted:
-                    ok, msg = is_valid_suno_link(manual_suno_url)
-
-                    if not ok:
-                        st.warning(msg)
+                    if ok:
+                        st.success(msg)
                     else:
-                        ok, msg = queue_manual_song_url(manual_suno_url, current_user=current_user)
-
-                        if ok:
-                            st.success(msg)
-                        else:
-                            st.error(msg)
+                        st.error(msg)
 
     st.divider()
 

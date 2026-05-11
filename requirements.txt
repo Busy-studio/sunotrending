@@ -3,4 +3,3 @@ pandas
 requests
 pyzipper
 ftfy
-Authlib>=1.3.2
