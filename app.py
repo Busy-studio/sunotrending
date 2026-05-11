@@ -2302,11 +2302,26 @@ def render_player_ranking_html(
     </div>
 
     <script>
-    let songs = __SONGS_JSON__;
-    let histories = __HISTORIES_JSON__;
-    const rankingConfig = __RANKING_CONFIG_JSON__;
-    const tabsData = __TABS_JSON__;
-    const tabsOrder = __TABS_ORDER_JSON__;
+    function decodeB64Json(b64, fallbackValue) {
+        try {
+            if (!b64) return fallbackValue;
+            const binary = atob(b64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i += 1) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return JSON.parse(new TextDecoder("utf-8").decode(bytes));
+        } catch (error) {
+            console.error("Failed to decode embedded JSON", error);
+            return fallbackValue;
+        }
+    }
+
+    let songs = decodeB64Json("__SONGS_JSON_B64__", []);
+    let histories = decodeB64Json("__HISTORIES_JSON_B64__", {});
+    const rankingConfig = decodeB64Json("__RANKING_CONFIG_JSON_B64__", {});
+    const tabsData = decodeB64Json("__TABS_JSON_B64__", null);
+    const tabsOrder = decodeB64Json("__TABS_ORDER_JSON_B64__", []);
     const defaultTabKey = __DEFAULT_TAB_KEY__;
 
     let playlist = [];
@@ -3392,15 +3407,20 @@ function cycleSort(key) {
     </script>
     """
 
+    def _b64_json_payload(value):
+        if value is None:
+            value = "null"
+        return base64.b64encode(str(value).encode("utf-8")).decode("ascii")
+
     full_html = (
         html_template
         .replace("{title_html}", title_html)
         .replace("{subtitle_html}", subtitle_html)
-        .replace("__SONGS_JSON__", songs_json)
-        .replace("__HISTORIES_JSON__", histories_json)
-        .replace("__RANKING_CONFIG_JSON__", ranking_config_json)
-        .replace("__TABS_JSON__", tabs_json or "null")
-        .replace("__TABS_ORDER_JSON__", tabs_order_json or "[]")
+        .replace("__SONGS_JSON_B64__", _b64_json_payload(songs_json))
+        .replace("__HISTORIES_JSON_B64__", _b64_json_payload(histories_json))
+        .replace("__RANKING_CONFIG_JSON_B64__", _b64_json_payload(ranking_config_json))
+        .replace("__TABS_JSON_B64__", _b64_json_payload(tabs_json or "null"))
+        .replace("__TABS_ORDER_JSON_B64__", _b64_json_payload(tabs_order_json or "[]"))
         .replace("__DEFAULT_TAB_KEY__", default_tab_key_js)
     )
 
@@ -3415,8 +3435,8 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.04.4")
-st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다. 내부 차트 탭 렌더링 방식으로 Top 200 표시를 안정화했습니다.")
+st.title("Suno Chart v1.04.3")
+st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
 
 if st.button("데이터 새로고침"):
     st.cache_data.clear()
@@ -3521,13 +3541,14 @@ if payload:
     if not tabs_order:
         st.info("표시할 탭 payload가 없습니다.")
     else:
-        # v1.04.4: 차트 선택과 렌더링을 HTML 컴포넌트 내부 탭 방식으로 통일한다.
-        # Streamlit radio + HTML 내부 탭 로직이 동시에 남아 있을 때 Top 200만 렌더링이 깨질 수 있어서,
-        # payload 전체를 render_player_ranking_payload_tabs()에 넘기고 rank-view-tabs에서 전환한다.
-        render_player_ranking_payload_tabs(
+        # v1.04.3: 선택 처리는 Streamlit에서 안정적으로 하고,
+        # selector는 왼쪽 플레이어 영역을 침범하지 않도록 오른쪽 랭킹 패널 위에만 표시한다.
+        # 선택된 차트의 제목/설명은 기존 ranking 컴포넌트의 title/subtitle 자리에 표시된다.
+        render_selected_payload_tab(
             tabs_payload,
             tabs_order=tabs_order,
             default_key="top200" if "top200" in tabs_order else tabs_order[0],
+            widget_key="payload_chart_view_selector",
         )
 
     st.stop()
@@ -3617,8 +3638,9 @@ fallback_tabs = {
     },
 }
 
-render_player_ranking_payload_tabs(
+render_selected_payload_tab(
     fallback_tabs,
     tabs_order=["new_songs", "top200", "rain_crew"],
     default_key="top200",
+    widget_key="fallback_chart_view_selector",
 )
