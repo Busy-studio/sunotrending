@@ -701,9 +701,76 @@ def choose_rows_to_update(db):
 
     if "created_at" in out.columns:
         out["created_at_dt"] = pd.to_datetime(out["created_at"], errors="coerce", utc=True)
-        out = out.sort_values("created_at_dt", ascending=False, na_position="last")
 
-    return out.head(MAX_UPDATE_ROWS).copy()
+        # created_at이 비어 있는 곡은 상세 페이지 재조회 기회가 없으면 계속 Top 200 후보에서 빠진다.
+        # 그래서 missing-created 곡을 우선 업데이트하고, 나머지는 최신순으로 채운다.
+        missing_created = out["created_at_dt"].isna()
+        missing_part = out[missing_created].copy()
+        normal_part = out[~missing_created].sort_values("created_at_dt", ascending=False, na_position="last").copy()
+        out = pd.concat([missing_part, normal_part], ignore_index=True)
+        print(
+            f"[choose_update] max={MAX_UPDATE_ROWS}, "
+            f"missing_created={int(missing_created.sum())}, normal={int((~missing_created).sum())}"
+        )
+    else:
+        print(f"[choose_update] created_at column missing, taking first {MAX_UPDATE_ROWS}")
+
+    return out.head(MAX_UPDATE_ROWS).drop(columns=["created_at_dt"], errors="ignore").copy()
+
+
+def restore_created_at_from_history(db):
+    """Fill missing active DB created_at from history snapshots and save the repaired DB in memory."""
+    if db is None or db.empty:
+        return db
+
+    if not os.path.exists(HISTORY_PATH):
+        print("[restore_created_at] skipped: history file missing")
+        return db
+
+    if "id" not in db.columns:
+        print("[restore_created_at] skipped: db id column missing")
+        return db
+
+    try:
+        hist = pd.read_csv(HISTORY_PATH)
+    except Exception as e:
+        print(f"[restore_created_at] skipped: failed to read history: {e}")
+        return db
+
+    if hist.empty or "id" not in hist.columns or "created_at" not in hist.columns:
+        print("[restore_created_at] skipped: no usable history created_at")
+        return db
+
+    db = db.copy()
+    if "created_at" not in db.columns:
+        db["created_at"] = pd.NA
+
+    db["id"] = db["id"].astype(str)
+    hist["id"] = hist["id"].astype(str)
+
+    db_created = pd.to_datetime(db["created_at"], errors="coerce", utc=True)
+    before_valid = int(db_created.notna().sum())
+
+    hist_created = pd.to_datetime(hist["created_at"], errors="coerce", utc=True)
+    hist = hist.assign(__created_at_dt=hist_created).dropna(subset=["__created_at_dt"])
+    if hist.empty:
+        print("[restore_created_at] skipped: all history created_at invalid")
+        return db
+
+    created_map = hist.groupby("id")["__created_at_dt"].min()
+    missing = db_created.isna()
+    restored = db.loc[missing, "id"].map(created_map)
+    restored_count = int(restored.notna().sum())
+
+    db.loc[missing & restored.notna(), "created_at"] = restored[restored.notna()].dt.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+
+    after_valid = int(pd.to_datetime(db["created_at"], errors="coerce", utc=True).notna().sum())
+    print(
+        f"[restore_created_at] valid_before={before_valid}/{len(db)}, "
+        f"restored={restored_count}, valid_after={after_valid}/{len(db)}"
+    )
+
+    return db
 
 
 def to_number(series):
@@ -1002,6 +1069,9 @@ def main():
 
     db, added_count, duplicate_count = add_new_songs_to_db(db, songs)
 
+    # 기존 DB에 created_at이 비어 있어도 history에는 남아 있을 수 있으므로 업데이트 대상 선정 전에 복구한다.
+    db = restore_created_at_from_history(db)
+
     print(
         f"[new_songs] discovered={len(songs)}, "
         f"added={added_count}, duplicates={duplicate_count}, db_rows={len(db)}"
@@ -1065,6 +1135,9 @@ def main():
     if "id" in final_db.columns:
         final_db["id"] = final_db["id"].astype(str)
         final_db = final_db.drop_duplicates(subset=["id"], keep="first")
+
+    # 상세 페이지 업데이트 이후에도 created_at이 비어 있는 행은 history 기준으로 한 번 더 복구한다.
+    final_db = restore_created_at_from_history(final_db)
 
     if "created_at" in final_db.columns:
         final_db["created_at_dt"] = pd.to_datetime(

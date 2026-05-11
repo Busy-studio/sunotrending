@@ -287,6 +287,58 @@ def build_history_payload(hist: pd.DataFrame, song_ids: list[str]) -> dict[str, 
     return result
 
 
+
+def restore_created_at_from_history(db: pd.DataFrame, hist: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing DB created_at values from history snapshots.
+
+    Some older rows can lose created_at in the active DB while history still has it.
+    Top 200/New Song/rain crew must all use the restored created_at before scoring/filtering.
+    """
+    if db is None or db.empty:
+        return db
+
+    if hist is None or hist.empty:
+        print("[app_payload] restore_created_at skipped: empty history")
+        return db
+
+    if "id" not in db.columns or "id" not in hist.columns or "created_at" not in hist.columns:
+        print("[app_payload] restore_created_at skipped: required columns missing")
+        return db
+
+    db = db.copy()
+    hist = hist.copy()
+
+    if "created_at" not in db.columns:
+        db["created_at"] = pd.NaT
+
+    db["id"] = db["id"].astype(str)
+    hist["id"] = hist["id"].astype(str)
+
+    before_valid = pd.to_datetime(db["created_at"], errors="coerce", utc=True).notna().sum()
+    created = pd.to_datetime(db["created_at"], errors="coerce", utc=True)
+
+    hist_created = pd.to_datetime(hist["created_at"], errors="coerce", utc=True)
+    hist = hist.assign(__created_at_dt=hist_created).dropna(subset=["__created_at_dt"])
+
+    if hist.empty:
+        print("[app_payload] restore_created_at skipped: no valid history created_at")
+        return db
+
+    created_map = hist.groupby("id")["__created_at_dt"].min()
+    missing = created.isna()
+    restored = db.loc[missing, "id"].map(created_map)
+    restored_count = int(restored.notna().sum())
+
+    db.loc[missing & restored.notna(), "created_at"] = restored[restored.notna()].dt.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+
+    after_valid = pd.to_datetime(db["created_at"], errors="coerce", utc=True).notna().sum()
+    print(
+        f"[app_payload] restore_created_at_from_history: "
+        f"valid_before={int(before_valid)}/{len(db)} restored={restored_count} valid_after={int(after_valid)}/{len(db)}"
+    )
+
+    return db
+
 def load_rain_crew_config() -> dict[str, set[str]]:
     empty = {"handles": set(), "user_ids": set(), "display_names": set()}
     if not CONFIG_PATH.exists():
@@ -402,7 +454,14 @@ def main() -> None:
     db = dedupe_columns(prepare_db(dedupe_columns(db)))
     hist = prepare_history(dedupe_columns(hist)) if not hist.empty else pd.DataFrame()
 
-    # 1) 전체 DB를 먼저 점수화한다.
+    # DB created_at이 비어 있으면 history에 남아 있는 created_at으로 먼저 복원한다.
+    # 이 복원을 안 하면 5월 10일처럼 누적은 있는데 created_at이 빈 곡들이 Top 200 후보에서 빠진다.
+    created_valid_before_restore = int(pd.to_datetime(db.get("created_at"), errors="coerce", utc=True).notna().sum()) if "created_at" in db.columns else 0
+    db = dedupe_columns(prepare_db(restore_created_at_from_history(db, hist)))
+    created_valid_after_restore = int(pd.to_datetime(db.get("created_at"), errors="coerce", utc=True).notna().sum()) if "created_at" in db.columns else 0
+    created_at_restored = max(0, created_valid_after_restore - created_valid_before_restore)
+
+    # 1) 복원된 전체 DB를 먼저 점수화한다.
     scored = dedupe_columns(score_songs(db, hist))
 
     # 2) 현재 시각 기준 4일 이내 생성곡 전체를 Top 200 후보군으로 삼는다.
@@ -436,6 +495,9 @@ def main() -> None:
             "generated_at": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M UTC"),
             "candidate_rule": f"valid created_at >= generated_at - {MAX_AGE_DAYS} days",
             "top200_rule": "score every active 4-day DB song, sort by trend_score desc, then created_at desc, then take top N",
+            "created_at_valid_before_restore": int(created_valid_before_restore),
+            "created_at_valid_after_restore": int(created_valid_after_restore),
+            "created_at_restored_from_history": int(created_at_restored),
             "active_song_count": int(len(active)),
             "db_song_count": int(len(db)),
             "history_row_count": int(len(hist)),
