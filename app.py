@@ -631,6 +631,75 @@ def display_tab_description(key, raw_description=None):
     return description or TAB_DESCRIPTIONS.get(str(key), "")
 
 
+
+
+def choose_chart_key(tabs_payload, tabs_order, default_key="top200", widget_key="chart_view_selector"):
+    tabs_payload = tabs_payload or {}
+    tabs_order = [key for key in (tabs_order or list(tabs_payload.keys())) if key in tabs_payload]
+
+    if not tabs_order:
+        return None
+
+    labels = []
+    label_to_key = {}
+
+    for key in tabs_order:
+        tab = tabs_payload.get(key, {}) or {}
+        label = display_tab_label(key, tab.get("title"))
+
+        # 혹시 같은 표시명이 생겨도 radio 매핑이 깨지지 않게 방어
+        if label in label_to_key:
+            label = f"{label} ({key})"
+
+        labels.append(label)
+        label_to_key[label] = key
+
+    if default_key not in tabs_order:
+        default_key = tabs_order[0]
+
+    default_label = next((label for label, key in label_to_key.items() if key == default_key), labels[0])
+    default_index = labels.index(default_label) if default_label in labels else 0
+
+    selected_label = st.radio(
+        "Chart",
+        labels,
+        index=default_index,
+        horizontal=True,
+        label_visibility="collapsed",
+        key=widget_key,
+    )
+
+    return label_to_key.get(selected_label, default_key)
+
+
+def render_selected_payload_tab(tabs_payload, tabs_order=None, default_key="top200", widget_key="chart_view_selector"):
+    tabs_payload = tabs_payload or {}
+    tabs_order = [key for key in (tabs_order or list(tabs_payload.keys())) if key in tabs_payload]
+
+    if not tabs_order:
+        st.info("표시할 탭 payload가 없습니다.")
+        return
+
+    selected_key = choose_chart_key(
+        tabs_payload,
+        tabs_order,
+        default_key=default_key if default_key in tabs_order else tabs_order[0],
+        widget_key=widget_key,
+    )
+
+    if not selected_key or selected_key not in tabs_payload:
+        st.info("선택한 차트 payload가 없습니다.")
+        return
+
+    tab = tabs_payload.get(selected_key, {}) or {}
+
+    render_player_ranking_payload(
+        tab.get("songs", []) or [],
+        histories=tab.get("histories", {}) or {},
+        title=display_tab_label(selected_key, tab.get("title")),
+        subtitle=display_tab_description(selected_key, tab.get("description")),
+    )
+
 def ranking_config_json():
     ranking_config = {
         "play_weight": PLAY_WEIGHT,
@@ -3370,12 +3439,14 @@ if payload:
     if not tabs_order:
         st.info("표시할 탭 payload가 없습니다.")
     else:
-        # New Song / Top 200 / ☔rain crew 선택 버튼은 HTML 컴포넌트 내부의
-        # {title_html} / {subtitle_html} 영역 바로 위에 렌더링된다.
-        render_player_ranking_payload_tabs(
+        # v1.04.1: HTML 내부 JS 탭이 일부 환경에서 안 보이는 문제가 있어서,
+        # Streamlit 쪽에서 차트 선택을 확실히 처리한다.
+        # 선택된 차트의 제목/설명은 기존 ranking 컴포넌트의 title/subtitle 자리에 표시된다.
+        render_selected_payload_tab(
             tabs_payload,
             tabs_order=tabs_order,
             default_key="top200" if "top200" in tabs_order else tabs_order[0],
+            widget_key="payload_chart_view_selector",
         )
 
     st.stop()
@@ -3465,8 +3536,9 @@ fallback_tabs = {
     },
 }
 
-render_player_ranking_payload_tabs(
+render_selected_payload_tab(
     fallback_tabs,
     tabs_order=["new_songs", "top200", "rain_crew"],
     default_key="top200",
+    widget_key="fallback_chart_view_selector",
 )
