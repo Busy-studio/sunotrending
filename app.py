@@ -613,13 +613,13 @@ def normalize_payload_songs(songs):
 TAB_LABELS = {
     "new_songs": "New Song",
     "top200": "Top 200",
-    "rain_crew": "Rain Crew",
+    "rain_crew": "☔rain crew",
 }
 
 TAB_DESCRIPTIONS = {
     "new_songs": "생성일 기준 최신순",
     "top200": "최근 4일 이내 곡 중 trend_score 상위 200",
-    "rain_crew": "Rain Crew 설정에 포함된 크리에이터 곡 최신순",
+    "rain_crew": "☔rain crew 설정에 포함된 크리에이터 곡 최신순",
 }
 
 def display_tab_label(key, raw_title=None):
@@ -2187,13 +2187,13 @@ def render_player_ranking_html(
     const TAB_LABEL_FALLBACKS = {
         "new_songs": "New Song",
         "top200": "Top 200",
-        "rain_crew": "Rain Crew",
+        "rain_crew": "☔rain crew",
     };
 
     const TAB_DESCRIPTION_FALLBACKS = {
         "new_songs": "생성일 기준 최신순",
         "top200": "최근 4일 이내 곡 중 trend_score 상위 200",
-        "rain_crew": "Rain Crew 설정에 포함된 크리에이터 곡 최신순",
+        "rain_crew": "☔rain crew 설정에 포함된 크리에이터 곡 최신순",
     };
 
     function prettifyTabKey(key) {
@@ -3335,7 +3335,7 @@ if payload:
     if not tabs_order:
         st.info("표시할 탭 payload가 없습니다.")
     else:
-        # New Song / Top 200 / Rain Crew 선택 버튼은 HTML 컴포넌트 내부의
+        # New Song / Top 200 / ☔rain crew 선택 버튼은 HTML 컴포넌트 내부의
         # {title_html} / {subtitle_html} 영역 바로 위에 렌더링된다.
         render_player_ranking_payload_tabs(
             tabs_payload,
@@ -3423,7 +3423,7 @@ fallback_tabs = {
     },
     "rain_crew": {
         "title": "☔rain crew",
-        "description": "Rain Crew 탭은 app payload 생성 후 config/rain_crew.json 기준으로 표시됩니다.",
+        "description": "☔rain crew 탭은 app payload 생성 후 config/rain_crew.json 기준으로 표시됩니다.",
         "songs": [],
         "histories": {},
     },
