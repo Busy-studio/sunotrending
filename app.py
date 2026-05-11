@@ -631,6 +631,72 @@ def display_tab_description(key, raw_description=None):
     return description or TAB_DESCRIPTIONS.get(str(key), "")
 
 
+def inject_chart_selector_css():
+    # Streamlit radio를 기존 HTML 내부 탭(.rank-view-tab)과 비슷한 pill 버튼 스타일로 보이게 만든다.
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stRadio"] {
+            margin: 0 0 8px 0;
+        }
+
+        div[data-testid="stRadio"] > label {
+            display: none;
+        }
+
+        div[data-testid="stRadio"] div[role="radiogroup"] {
+            display: flex;
+            flex-direction: row;
+            flex-wrap: wrap;
+            gap: 7px;
+            align-items: center;
+            margin: 0 0 8px 0;
+        }
+
+        div[data-testid="stRadio"] div[role="radiogroup"] label {
+            border: 1px solid #d1d5db;
+            background: #ffffff;
+            color: #6b7280;
+            border-radius: 999px;
+            padding: 7px 12px;
+            font-size: 12px;
+            font-weight: 900;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            min-height: auto;
+            margin: 0;
+        }
+
+        div[data-testid="stRadio"] div[role="radiogroup"] label:hover {
+            border-color: #ef4444;
+            color: #ef4444;
+        }
+
+        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) {
+            background: #ef4444 !important;
+            border-color: #ef4444 !important;
+            color: #ffffff !important;
+        }
+
+        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) p,
+        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) span {
+            color: #ffffff !important;
+        }
+
+        div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
+            display: none;
+        }
+
+        div[data-testid="stRadio"] div[role="radiogroup"] label p {
+            margin: 0;
+            line-height: 1.2;
+            font-size: 12px;
+            font-weight: 900;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def choose_chart_key(tabs_payload, tabs_order, default_key="top200", widget_key="chart_view_selector"):
@@ -659,6 +725,8 @@ def choose_chart_key(tabs_payload, tabs_order, default_key="top200", widget_key=
 
     default_label = next((label for label, key in label_to_key.items() if key == default_key), labels[0])
     default_index = labels.index(default_label) if default_label in labels else 0
+
+    inject_chart_selector_css()
 
     selected_label = st.radio(
         "Chart",
@@ -3333,7 +3401,7 @@ function cycleSort(key) {
 # Main
 # ================================
 
-st.title("Suno Chart v1.04")
+st.title("Suno Chart v1.04.2")
 st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
 
 if st.button("데이터 새로고침"):
@@ -3439,8 +3507,8 @@ if payload:
     if not tabs_order:
         st.info("표시할 탭 payload가 없습니다.")
     else:
-        # v1.04.1: HTML 내부 JS 탭이 일부 환경에서 안 보이는 문제가 있어서,
-        # Streamlit 쪽에서 차트 선택을 확실히 처리한다.
+        # v1.04.2: 선택 처리는 Streamlit에서 안정적으로 하고,
+        # 스타일은 기존 HTML 내부 탭과 비슷한 빨간 pill 버튼으로 보이게 한다.
         # 선택된 차트의 제목/설명은 기존 ranking 컴포넌트의 title/subtitle 자리에 표시된다.
         render_selected_payload_tab(
             tabs_payload,
