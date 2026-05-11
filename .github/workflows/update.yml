@@ -314,7 +314,20 @@ jobs:
 
           rm -rf "$DATA_BRANCH_DIR"
 
-          git fetch origin data || true
+          # Retry logic for git fetch
+          for attempt in 1 2 3; do
+            echo "Fetch attempt $attempt/3..."
+            if git fetch origin data; then
+              break
+            fi
+
+            if [ $attempt -eq 3 ]; then
+              echo "Fetch failed after 3 attempts. Will try to create data branch if needed."
+              break
+            fi
+
+            sleep $((2 ** attempt))
+          done
 
           if git show-ref --verify --quiet refs/remotes/origin/data; then
             echo "Using existing origin/data branch"
@@ -332,6 +345,14 @@ jobs:
           cp data/suno_song_db.zip "$DATA_BRANCH_DIR/data/suno_song_db.zip"
           cp data/suno_song_history.zip "$DATA_BRANCH_DIR/data/suno_song_history.zip"
 
+          if [ -f data/suno_song_archive.zip ]; then
+            cp data/suno_song_archive.zip "$DATA_BRANCH_DIR/data/suno_song_archive.zip"
+          fi
+
+          if [ -f data/suno_app_payload.zip ]; then
+            cp data/suno_app_payload.zip "$DATA_BRANCH_DIR/data/suno_app_payload.zip"
+          fi
+
           if [ -f data/manual_song_queue.csv ]; then
             cp data/manual_song_queue.csv "$DATA_BRANCH_DIR/data/manual_song_queue.csv"
           fi
@@ -339,6 +360,14 @@ jobs:
           cd "$DATA_BRANCH_DIR"
 
           git add data/suno_song_db.zip data/suno_song_history.zip
+
+          if [ -f data/suno_song_archive.zip ]; then
+            git add data/suno_song_archive.zip
+          fi
+
+          if [ -f data/suno_app_payload.zip ]; then
+            git add data/suno_app_payload.zip
+          fi
 
           if [ -f data/manual_song_queue.csv ]; then
             git add data/manual_song_queue.csv
@@ -353,6 +382,19 @@ jobs:
               git commit -m "Update encrypted Suno data"
             fi
 
-            git push origin HEAD:data
-            echo "Pushed data to data branch successfully."
+            # Retry logic for git push
+            for attempt in 1 2 3; do
+              echo "Push attempt $attempt/3..."
+              if git push origin HEAD:data; then
+                echo "Pushed data to data branch successfully."
+                break
+              elif [ $attempt -lt 3 ]; then
+                sleep $((2 ** attempt))
+                git fetch origin data || true
+                git rebase origin/data || true
+              else
+                echo "Failed to push after 3 attempts"
+                exit 1
+              fi
+            done
           fi
