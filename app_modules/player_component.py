@@ -933,6 +933,8 @@ def render_player_ranking_html(
     let playlist = [];
     let currentIndex = -1;
     let audio = new Audio();
+    let suppressStateSave = false;
+    let lastStateSaveAt = 0;
 
     let repeatOne = false;
     let repeatAll = true;
@@ -1238,21 +1240,43 @@ function cycleSort(key) {
         }).join("");
     }
 
-    function savePlaylistState() {
+    function savePlaylistState(force = false) {
+        if (suppressStateSave && !force) return;
+
         try {
             const currentSong = getCurrentSong();
+            const hasActiveAudio = Boolean(currentSong && audio && audio.src);
+            const currentTime = hasActiveAudio && Number.isFinite(audio.currentTime)
+                ? audio.currentTime
+                : 0;
+            const duration = hasActiveAudio && Number.isFinite(audio.duration)
+                ? audio.duration
+                : 0;
+            const isPlaying = hasActiveAudio && !audio.paused && !audio.ended;
             const state = {
                 playlist,
                 currentSongId: currentSong ? String(currentSong.id) : null,
+                currentTime,
+                duration,
+                isPlaying,
+                audioSrc: hasActiveAudio ? audio.src : null,
                 repeatOne,
                 repeatAll,
                 playbackMode,
                 volume: Number(volume.value || 75),
+                savedAt: Date.now(),
             };
             window.localStorage.setItem(playlistStorageKey, JSON.stringify(state));
         } catch (error) {
             console.warn("Failed to save playlist state", error);
         }
+    }
+
+    function savePlaylistStateThrottled() {
+        const now = Date.now();
+        if (now - lastStateSaveAt < 1000) return;
+        lastStateSaveAt = now;
+        savePlaylistState();
     }
 
     function restorePlaylistState() {
@@ -1283,7 +1307,11 @@ function cycleSort(key) {
             }
 
             if (currentIndex >= 0) {
-                loadCurrent(false);
+                loadCurrent(false, {
+                    restoreTime: Number(state.currentTime || 0),
+                    restoreAutoplay: Boolean(state.isPlaying),
+                    skipInitialSave: true,
+                });
             } else {
                 updateNowPlaying(null);
             }
@@ -1664,7 +1692,7 @@ function cycleSort(key) {
         refreshButtonsAndCovers();
     }
 
-    function loadCurrent(autoplay) {
+    function loadCurrent(autoplay, options = {}) {
         if (currentIndex < 0 || currentIndex >= playlist.length) {
             updateNowPlaying(null);
             return;
@@ -1680,29 +1708,56 @@ function cycleSort(key) {
             return;
         }
 
+        const restoreTime = Number(options.restoreTime || 0);
+        const shouldAutoplay = Boolean(autoplay || options.restoreAutoplay);
+        const isRestoreAutoplay = Boolean(options.restoreAutoplay && !autoplay);
+
+        suppressStateSave = true;
         audio.pause();
         audio.src = song.audio_url;
         audio.load();
         updateVolume();
+        suppressStateSave = false;
 
-        if (autoplay) {
+        const startPlayback = () => {
             audio.play()
                 .then(() => {
                     playBtn.textContent = "Ⅱ";
                     refreshButtonsAndCovers();
+                    savePlaylistState(true);
                 })
                 .catch(err => {
                     console.log(err);
                     playBtn.textContent = "▶";
                     refreshButtonsAndCovers();
-                    alert("브라우저가 오디오 재생을 막았거나 URL을 재생할 수 없습니다.");
+                    savePlaylistState(true);
+                    if (!isRestoreAutoplay) {
+                        alert("브라우저가 오디오 재생을 막았거나 URL을 재생할 수 없습니다.");
+                    }
                 });
+        };
+
+        const restorePositionAndMaybePlay = () => {
+            if (restoreTime > 0 && Number.isFinite(audio.duration) && audio.duration > 0) {
+                audio.currentTime = Math.min(Math.max(0, restoreTime), Math.max(0, audio.duration - 0.25));
+            }
+
+            if (shouldAutoplay) {
+                startPlayback();
+            } else {
+                playBtn.textContent = "▶";
+                refreshButtonsAndCovers();
+                if (!options.skipInitialSave) savePlaylistState(true);
+            }
+        };
+
+        if (restoreTime > 0 || shouldAutoplay) {
+            audio.addEventListener("loadedmetadata", restorePositionAndMaybePlay, { once: true });
         } else {
             playBtn.textContent = "▶";
             refreshButtonsAndCovers();
+            if (!options.skipInitialSave) savePlaylistState(true);
         }
-
-        savePlaylistState();
     }
 
     function togglePlay() {
@@ -1854,6 +1909,7 @@ function cycleSort(key) {
         if (!isFinite(audio.duration) || audio.duration <= 0) return;
 
         audio.currentTime = (Number(progress.value) / 1000) * audio.duration;
+        savePlaylistState(true);
     });
 
     audio.addEventListener("timeupdate", () => {
@@ -1861,6 +1917,7 @@ function cycleSort(key) {
             progress.value = Math.round((audio.currentTime / audio.duration) * 1000);
             currentTimeEl.textContent = formatTime(audio.currentTime);
             durationEl.textContent = formatTime(audio.duration);
+            savePlaylistStateThrottled();
         }
     });
 
@@ -1871,11 +1928,13 @@ function cycleSort(key) {
     audio.addEventListener("play", () => {
         playBtn.textContent = "Ⅱ";
         refreshButtonsAndCovers();
+        savePlaylistState(true);
     });
 
     audio.addEventListener("pause", () => {
         playBtn.textContent = "▶";
         refreshButtonsAndCovers();
+        savePlaylistState(true);
     });
 
     audio.addEventListener("ended", () => {
@@ -2072,6 +2131,9 @@ function cycleSort(key) {
         return false;
     }
 
+    window.addEventListener("pagehide", () => savePlaylistState(true));
+    window.addEventListener("beforeunload", () => savePlaylistState(true));
+
     bindSortHeaderEvents();
     const tabsInitialized = initRankTabs();
     if (!tabsInitialized) {
@@ -2081,7 +2143,6 @@ function cycleSort(key) {
     renderPlaylist();
     refreshModeButtons();
     updateVolume();
-    savePlaylistState();
     </script>
     """
 
