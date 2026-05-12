@@ -5,6 +5,7 @@ import random
 import math
 import requests
 import pandas as pd
+from ranking_core import add_growth_features as core_add_growth_features, filter_active as core_filter_active, score_songs as core_score_songs
 from update_public_song_pages import (
     get_archive_columns,
     load_history_for_archive,
@@ -28,7 +29,7 @@ GROWTH_WINDOW_HOURS = int(os.getenv("GROWTH_WINDOW_HOURS", "3"))
 PLAY_WEIGHT = float(os.getenv("PLAY_WEIGHT", "1.0"))
 LIKE_WEIGHT = float(os.getenv("LIKE_WEIGHT", "3.0"))
 COMMENT_WEIGHT = float(os.getenv("COMMENT_WEIGHT", "4.0"))
-GROWTH_WEIGHT = float(os.getenv("GROWTH_WEIGHT", "2.5"))
+GROWTH_WEIGHT = float(os.getenv("GROWTH_WEIGHT", "1.5"))
 FRESHNESS_WEIGHT = float(os.getenv("FRESHNESS_WEIGHT", "35.0"))
 FRESHNESS_POWER = float(os.getenv("FRESHNESS_POWER", "1.35"))
 
@@ -300,119 +301,13 @@ def prepare_history_for_scoring(hist):
 
 
 def add_growth_features(db, hist, window_hours):
-    db = db.copy()
-
-    for col in [
-        "play_delta_window",
-        "upvote_delta_window",
-        "comment_delta_window",
-        "play_velocity_per_hour",
-        "upvote_velocity_per_hour",
-        "comment_velocity_per_hour",
-    ]:
-        db[col] = 0.0
-
-    if hist.empty or "id" not in hist.columns or "checked_at" not in hist.columns:
-        return db
-
-    now = pd.Timestamp.now(tz="UTC")
-    cutoff = now - pd.Timedelta(hours=window_hours)
-
-    recent = hist[hist["checked_at"] >= cutoff].copy()
-
-    if recent.empty:
-        return db
-
-    agg_rows = []
-
-    for song_id, g in recent.groupby("id"):
-        g = g.sort_values("checked_at")
-
-        if len(g) < 2:
-            continue
-
-        first = g.iloc[0]
-        last = g.iloc[-1]
-
-        hours = (last["checked_at"] - first["checked_at"]).total_seconds() / 3600
-
-        if hours <= 0:
-            hours = max(window_hours, 1)
-
-        play_delta = max(0, float(last.get("play_count", 0)) - float(first.get("play_count", 0)))
-        upvote_delta = max(0, float(last.get("upvote_count", 0)) - float(first.get("upvote_count", 0)))
-        comment_delta = max(0, float(last.get("comment_count", 0)) - float(first.get("comment_count", 0)))
-
-        agg_rows.append({
-            "id": str(song_id),
-            "play_delta_window": play_delta,
-            "upvote_delta_window": upvote_delta,
-            "comment_delta_window": comment_delta,
-            "play_velocity_per_hour": play_delta / hours,
-            "upvote_velocity_per_hour": upvote_delta / hours,
-            "comment_velocity_per_hour": comment_delta / hours,
-        })
-
-    if not agg_rows:
-        return db
-
-    growth = pd.DataFrame(agg_rows)
-    db = db.merge(growth, on="id", how="left", suffixes=("", "_growth"))
-
-    for col in [
-        "play_delta_window",
-        "upvote_delta_window",
-        "comment_delta_window",
-        "play_velocity_per_hour",
-        "upvote_velocity_per_hour",
-        "comment_velocity_per_hour",
-    ]:
-        if col in db.columns:
-            db[col] = db[col].fillna(0)
-
-    return db
+    """Compatibility wrapper; scoring lives in ranking_core."""
+    return core_add_growth_features(db, hist, window_hours)
 
 
 def score_songs(db, hist):
-    view = db.copy()
-
-    now = pd.Timestamp.now(tz="UTC")
-
-    if "created_at" not in view.columns:
-        view["created_at"] = pd.NaT
-
-    view["age_hours"] = (now - view["created_at"]).dt.total_seconds() / 3600
-    view["age_hours"] = view["age_hours"].clip(lower=0)
-
-    view["remaining_hours"] = (RETENTION_HOURS - view["age_hours"]).clip(lower=0)
-
-    view["freshness"] = (view["remaining_hours"] / RETENTION_HOURS).clip(lower=0, upper=1)
-    view["freshness_score"] = (view["freshness"] ** FRESHNESS_POWER) * FRESHNESS_WEIGHT
-
-    view = add_growth_features(view, hist, GROWTH_WINDOW_HOURS)
-
-    view["base_score"] = (
-        PLAY_WEIGHT * view["play_count"].apply(lambda x: math.log1p(max(0, x)))
-        + LIKE_WEIGHT * view["upvote_count"].apply(lambda x: math.log1p(max(0, x)))
-        + COMMENT_WEIGHT * view["comment_count"].apply(lambda x: math.log1p(max(0, x)))
-    )
-
-    view["growth_score_raw"] = (
-        1.2 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 5.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 8.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-    )
-
-    view["growth_score"] = view["growth_score_raw"] * GROWTH_WEIGHT
-
-    view["trend_score"] = (
-        view["base_score"]
-        + view["growth_score"]
-        + view["freshness_score"]
-    )
-
-    return view
-
+    """Compatibility wrapper; scoring lives in ranking_core."""
+    return core_score_songs(db, hist)
 
 def filter_recent_and_noncontest(df):
     view = df.copy()
@@ -541,8 +436,8 @@ def main():
 
     hist = prepare_history_for_scoring(hist_raw)
 
-    scored = score_songs(db_for_score, hist)
-    scored = filter_recent_and_noncontest(scored)
+    scored = core_score_songs(db_for_score, hist)
+    scored = core_filter_active(scored, max_age_days=SONG_RETENTION_DAYS, hide_contest=True)
 
     top = scored.sort_values(
         "trend_score",

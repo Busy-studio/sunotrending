@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime, timezone
 
 from ranking_core import (
+    add_growth_features as core_add_growth_features,
     prepare_history,
     restore_created_at_from_history as core_restore_created_at_from_history,
     score_songs as core_score_songs,
@@ -780,49 +781,8 @@ def load_history_for_archive():
 
 
 def add_growth_features_for_archive(db, hist, window_hours):
-    db = db.copy()
-
-    for col in ["play_delta_window", "upvote_delta_window", "comment_delta_window"]:
-        db[col] = 0.0
-
-    if hist.empty or "id" not in hist.columns or "checked_at" not in hist.columns:
-        return db
-
-    now = pd.Timestamp.now(tz="UTC")
-    cutoff = now - pd.Timedelta(hours=window_hours)
-    recent = hist[hist["checked_at"] >= cutoff].copy()
-    if recent.empty:
-        return db
-
-    rows = []
-    for song_id, g in recent.groupby("id"):
-        g = g.sort_values("checked_at")
-        if len(g) < 2:
-            continue
-        first = g.iloc[0]
-        last = g.iloc[-1]
-        rows.append({
-            "id": str(song_id),
-            "play_delta_window": max(0, float(last.get("play_count", 0)) - float(first.get("play_count", 0))),
-            "upvote_delta_window": max(0, float(last.get("upvote_count", 0)) - float(first.get("upvote_count", 0))),
-            "comment_delta_window": max(0, float(last.get("comment_count", 0)) - float(first.get("comment_count", 0))),
-        })
-
-    if not rows:
-        return db
-
-    growth = pd.DataFrame(rows)
-    db = db.merge(growth, on="id", how="left", suffixes=("", "_growth"))
-
-    for col in ["play_delta_window", "upvote_delta_window", "comment_delta_window"]:
-        growth_col = f"{col}_growth"
-        if growth_col in db.columns:
-            db[col] = db[growth_col].fillna(db[col])
-            db = db.drop(columns=[growth_col], errors="ignore")
-        db[col] = db[col].fillna(0)
-
-    return db
-
+    """Compatibility wrapper; archive scoring uses ranking_core."""
+    return core_add_growth_features(db, hist, window_hours)
 
 def score_songs_for_archive(db, hist):
     """Score archive candidates with the same shared ranking core used by payload/rank movement."""

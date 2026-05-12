@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 from scripts.secure_csv import decrypt_zip_to_file
+from scripts.ranking_core import add_growth_features as core_add_growth_features, score_songs as core_score_songs
 
 try:
     import ftfy
@@ -990,135 +991,8 @@ def prepare_history(hist):
 # ================================
 
 def add_growth_features(db, hist, window_hours):
-    db = db.copy()
-
-    for col in [
-        "play_delta_window",
-        "upvote_delta_window",
-        "comment_delta_window",
-        "play_velocity_per_hour",
-        "upvote_velocity_per_hour",
-        "comment_velocity_per_hour",
-    ]:
-        db[col] = 0.0
-
-    if hist.empty or "id" not in hist.columns or "checked_at" not in hist.columns:
-        return db
-
-    if "id" not in db.columns:
-        return db
-
-    hist = hist.copy()
-    hist["id"] = hist["id"].astype(str)
-    hist["checked_at"] = pd.to_datetime(hist["checked_at"], errors="coerce", utc=True)
-
-    for col in ["play_count", "upvote_count", "comment_count"]:
-        if col in hist.columns:
-            hist[col] = pd.to_numeric(hist[col], errors="coerce").fillna(0)
-        else:
-            hist[col] = 0
-
-    db_created = db[["id", "created_at"]].copy()
-    db_created["id"] = db_created["id"].astype(str)
-    db_created = db_created.rename(columns={"created_at": "song_created_at"})
-    db_created["song_created_at"] = pd.to_datetime(
-        db_created["song_created_at"],
-        errors="coerce",
-        utc=True,
-    )
-
-    # hist 안에 created_at이 이미 있어도 충돌 안 나게 song_created_at이라는 별도 이름으로 붙임
-    hist = hist.merge(db_created, on="id", how="left")
-
-    agg_rows = []
-
-    for song_id, g in hist.groupby("id"):
-        g = g.sort_values("checked_at").copy()
-
-        if g.empty:
-            continue
-
-        created_at = g["song_created_at"].dropna()
-
-        if created_at.empty:
-            continue
-
-        created_at = created_at.iloc[0]
-
-        # 생성 후 3시간이 지난 시점을 성장 기준점으로 잡음
-        anchor_time = created_at + pd.Timedelta(hours=window_hours)
-
-        # 생성 후 3시간 이후의 히스토리만 사용
-        after_anchor = g[g["checked_at"] >= anchor_time].copy()
-
-        if len(after_anchor) < 2:
-            continue
-
-        first = after_anchor.iloc[0]
-        last = after_anchor.iloc[-1]
-
-        hours = (last["checked_at"] - first["checked_at"]).total_seconds() / 3600
-
-        if hours <= 0:
-            continue
-
-        play_delta_total = max(
-            0,
-            float(last.get("play_count", 0)) - float(first.get("play_count", 0))
-        )
-        upvote_delta_total = max(
-            0,
-            float(last.get("upvote_count", 0)) - float(first.get("upvote_count", 0))
-        )
-        comment_delta_total = max(
-            0,
-            float(last.get("comment_count", 0)) - float(first.get("comment_count", 0))
-        )
-
-        play_velocity = play_delta_total / hours
-        upvote_velocity = upvote_delta_total / hours
-        comment_velocity = comment_delta_total / hours
-
-        # 기존 growth 공식은 "window_hours 동안의 증가량"을 기대하니까,
-        # 기울기(per hour)를 다시 3시간 증가량 환산값으로 바꿔 넣음
-        play_delta_window = play_velocity * window_hours
-        upvote_delta_window = upvote_velocity * window_hours
-        comment_delta_window = comment_velocity * window_hours
-
-        agg_rows.append({
-            "id": str(song_id),
-            "play_delta_window": play_delta_window,
-            "upvote_delta_window": upvote_delta_window,
-            "comment_delta_window": comment_delta_window,
-            "play_velocity_per_hour": play_velocity,
-            "upvote_velocity_per_hour": upvote_velocity,
-            "comment_velocity_per_hour": comment_velocity,
-        })
-
-    if not agg_rows:
-        return db
-
-    growth = pd.DataFrame(agg_rows)
-    db = db.merge(growth, on="id", how="left", suffixes=("", "_growth"))
-
-    for col in [
-        "play_delta_window",
-        "upvote_delta_window",
-        "comment_delta_window",
-        "play_velocity_per_hour",
-        "upvote_velocity_per_hour",
-        "comment_velocity_per_hour",
-    ]:
-        growth_col = f"{col}_growth"
-
-        if growth_col in db.columns:
-            db[col] = db[growth_col].fillna(db[col])
-            db = db.drop(columns=[growth_col], errors="ignore")
-
-        db[col] = db[col].fillna(0)
-
-    return db
-
+    """Fallback helper delegated to the shared ranking core."""
+    return core_add_growth_features(db, hist, window_hours)
 
 def score_songs(
     db,
@@ -1131,61 +1005,22 @@ def score_songs(
     growth_window_hours,
     freshness_power,
 ):
-    view = db.copy()
+    """Fallback app scoring delegated to the shared ranking core.
 
-    now = pd.Timestamp.now(tz="UTC")
-
-    if "created_at" not in view.columns:
-        view["created_at"] = pd.NaT
-
-    view["age_hours"] = (now - view["created_at"]).dt.total_seconds() / 3600
-    view["age_hours"] = view["age_hours"].clip(lower=0)
-
-    view["remaining_hours"] = (RETENTION_HOURS - view["age_hours"]).clip(lower=0)
-
-    view["freshness"] = (view["remaining_hours"] / RETENTION_HOURS).clip(lower=0, upper=1)
-    view["freshness_score"] = (view["freshness"] ** freshness_power) * freshness_weight
-
-    view = add_growth_features(view, hist, growth_window_hours)
-
-    for col in ["play_count", "upvote_count", "comment_count"]:
-        if col not in view.columns:
-            view[col] = 0
-        view[col] = pd.to_numeric(view[col], errors="coerce").fillna(0)
-
-    if "adjusted_comment_count" in view.columns:
-        view["effective_comment_count"] = pd.to_numeric(
-            view["adjusted_comment_count"],
-            errors="coerce",
-        )
-        view["effective_comment_count"] = view["effective_comment_count"].fillna(view["comment_count"])
-    else:
-        view["effective_comment_count"] = view["comment_count"]
-
-    view["effective_comment_count"] = view["effective_comment_count"].clip(lower=0)
-
-    view["base_score"] = (
-        play_weight * view["play_count"].apply(lambda x: math.log1p(max(0, x)))
-        + like_weight * view["upvote_count"].apply(lambda x: math.log1p(max(0, x)))
-        + comment_weight * view["effective_comment_count"].apply(lambda x: math.log1p(max(0, x)))
+    The normal app path uses the prebuilt payload. This fallback stays aligned with
+    GitHub Actions scoring when payload loading is unavailable.
+    """
+    return core_score_songs(
+        db=db,
+        hist=hist,
+        play_weight=play_weight,
+        like_weight=like_weight,
+        comment_weight=comment_weight,
+        growth_weight=growth_weight,
+        freshness_weight=freshness_weight,
+        growth_window_hours=growth_window_hours,
+        freshness_power=freshness_power,
     )
-
-    view["growth_score_raw"] = (
-        0.4 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 2.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 3.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-    )
-
-    view["growth_score"] = view["growth_score_raw"] * growth_weight
-
-    view["trend_score"] = (
-        view["base_score"]
-        + view["growth_score"]
-        + view["freshness_score"]
-    )
-
-    return view
-
 
 def add_outlier_flags(df, sigma=3.0, use_log=True):
     view = df.copy()
