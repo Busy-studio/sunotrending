@@ -845,14 +845,13 @@ if payload:
     if not tabs_order:
         st.info("표시할 탭 payload가 없습니다.")
     else:
-        # v1.04.3: 선택 처리는 Streamlit에서 안정적으로 하고,
-        # selector는 왼쪽 플레이어 영역을 침범하지 않도록 오른쪽 랭킹 패널 위에만 표시한다.
-        # 선택된 차트의 제목/설명은 기존 ranking 컴포넌트의 title/subtitle 자리에 표시된다.
-        render_selected_payload_tab(
+        # 플레이어와 차트를 하나의 HTML 컴포넌트 안에서 관리한다.
+        # Streamlit radio/st.tabs로 차트를 바꾸면 전체 컴포넌트가 재마운트되어 <audio>가 끊기므로,
+        # 탭 전환은 JS 내부에서 처리하고 왼쪽 플레이어 프레임은 그대로 유지한다.
+        render_player_ranking_payload_tabs(
             tabs_payload,
             tabs_order=tabs_order,
             default_key="top200" if "top200" in tabs_order else tabs_order[0],
-            widget_key="payload_chart_view_selector",
         )
 
     st.stop()
@@ -942,9 +941,10 @@ fallback_tabs = {
     },
 }
 
-render_selected_payload_tab(
+# fallback에서도 Streamlit radio 대신 HTML 내부 탭을 사용해서
+# 차트를 바꿀 때 플레이어가 재마운트되지 않도록 한다.
+render_player_ranking_payload_tabs(
     fallback_tabs,
     tabs_order=["new_songs", "top200", "rain_crew"],
     default_key="top200",
-    widget_key="fallback_chart_view_selector",
 )
