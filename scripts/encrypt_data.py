@@ -26,6 +26,11 @@ def ensure_default_csvs() -> None:
             "download_disabled_reason", "is_public", "is_hidden", "is_trashed",
             "explicit", "model", "major_model_version", "display_tags", "duration",
             "song_url", "audio_url", "image_url", "source",
+            "integrated_lufs", "true_peak_db", "loudness_gain_db",
+            "loudness_target_lufs", "loudness_true_peak_ceiling_db",
+            "loudness_checked_at", "loudness_status", "loudness_error",
+            "loudness_audio_url_hash", "loudness_input_lra",
+            "loudness_input_thresh", "loudness_target_offset",
         ]).to_csv(DB_CSV, index=False, encoding="utf-8-sig")
 
     if not os.path.exists(HISTORY_CSV):
@@ -51,6 +56,11 @@ def ensure_default_csvs() -> None:
             "model", "major_model_version", "display_tags", "duration",
             "lyrics", "prompt", "gpt_description_prompt",
             "song_url", "audio_url", "image_url", "source",
+            "integrated_lufs", "true_peak_db", "loudness_gain_db",
+            "loudness_target_lufs", "loudness_true_peak_ceiling_db",
+            "loudness_checked_at", "loudness_status", "loudness_error",
+            "loudness_audio_url_hash", "loudness_input_lra",
+            "loudness_input_thresh", "loudness_target_offset",
         ]).to_csv(ARCHIVE_CSV, index=False, encoding="utf-8-sig")
 
     if not os.path.exists(RANK_HISTORY_CSV):

@@ -95,6 +95,11 @@ def ensure_data_files():
             "model", "major_model_version", "display_tags", "duration",
             "lyrics", "prompt", "gpt_description_prompt",
             "song_url", "audio_url", "image_url", "source",
+            "integrated_lufs", "true_peak_db", "loudness_gain_db",
+            "loudness_target_lufs", "loudness_true_peak_ceiling_db",
+            "loudness_checked_at", "loudness_status", "loudness_error",
+            "loudness_audio_url_hash", "loudness_input_lra",
+            "loudness_input_thresh", "loudness_target_offset",
         ]).to_csv(DB_PATH, index=False, encoding="utf-8-sig")
 
     if not os.path.exists(HISTORY_PATH):
@@ -143,6 +148,11 @@ def get_archive_columns():
         "model", "major_model_version", "display_tags", "duration",
         "lyrics", "prompt", "gpt_description_prompt",
         "song_url", "audio_url", "image_url", "source",
+        "integrated_lufs", "true_peak_db", "loudness_gain_db",
+        "loudness_target_lufs", "loudness_true_peak_ceiling_db",
+        "loudness_checked_at", "loudness_status", "loudness_error",
+        "loudness_audio_url_hash", "loudness_input_lra",
+        "loudness_input_thresh", "loudness_target_offset",
     ]
 
 

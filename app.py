@@ -654,6 +654,12 @@ def build_song_payload(df):
             "song_url": safe_url(r.get("song_url", "")),
             "audio_url": safe_url(r.get("audio_url", "")),
             "image_url": safe_url(r.get("image_url", "")),
+            "integrated_lufs": safe_float_or_none(r.get("integrated_lufs", None)),
+            "true_peak_db": safe_float_or_none(r.get("true_peak_db", None)),
+            "loudness_gain_db": safe_float_or_none(r.get("loudness_gain_db", None)),
+            "loudness_target_lufs": safe_float_or_none(r.get("loudness_target_lufs", -14.0)) or -14.0,
+            "loudness_true_peak_ceiling_db": safe_float_or_none(r.get("loudness_true_peak_ceiling_db", -1.0)) or -1.0,
+            "loudness_status": safe_text(r.get("loudness_status", "")),
             "lyrics": lyrics_text,
 
             "trend_score": safe_float_or_none(r.get("trend_score", 0)) or 0,

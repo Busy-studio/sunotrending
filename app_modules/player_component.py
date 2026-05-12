@@ -266,6 +266,41 @@ def render_player_ranking_html(
         margin: 8px 0 12px 0;
     }
 
+    .loudness-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: center;
+        font-size: 11px;
+        color: var(--muted);
+        margin: -4px 0 12px 0;
+    }
+
+    .loudness-status {
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .loudness-btn {
+        border: 1px solid var(--line-dark);
+        background: #ffffff;
+        color: var(--text);
+        border-radius: 999px;
+        padding: 6px 9px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 850;
+        white-space: nowrap;
+    }
+
+    .loudness-btn.active {
+        background: #fee2e2;
+        color: var(--accent-dark);
+        border-color: var(--accent);
+    }
+
     .playlist-head {
         display: flex;
         justify-content: space-between;
@@ -819,6 +854,11 @@ def render_player_ranking_html(
                 <span id="volumeText">80%</span>
             </div>
 
+            <div class="loudness-row">
+                <span class="loudness-status" id="loudnessStatus">LUFS 정규화 꺼짐</span>
+                <button class="loudness-btn" id="loudnessNormalizeBtn" title="분석된 LUFS/True Peak 값으로 -14 LUFS 기준 재생 볼륨을 보정합니다.">-14 LUFS OFF</button>
+            </div>
+
             <div class="playlist-head">
                 <div class="playlist-title">Playlist</div>
                 <div class="playlist-count" id="playlistCount">0 tracks</div>
@@ -933,6 +973,12 @@ def render_player_ranking_html(
     let playlist = [];
     let currentIndex = -1;
     let audio = new Audio();
+    let audioContext = null;
+    let audioSourceNode = null;
+    let loudnessGainNode = null;
+    let webAudioReady = false;
+    let webAudioFailed = false;
+    let loudnessNormalize = false;
     let suppressStateSave = false;
     let lastStateSaveAt = 0;
 
@@ -963,6 +1009,8 @@ def render_player_ranking_html(
     const clearBtn = document.getElementById("clearBtn");
     const volume = document.getElementById("volume");
     const volumeText = document.getElementById("volumeText");
+    const loudnessNormalizeBtn = document.getElementById("loudnessNormalizeBtn");
+    const loudnessStatus = document.getElementById("loudnessStatus");
     const progress = document.getElementById("progress");
     const currentTimeEl = document.getElementById("currentTime");
     const durationEl = document.getElementById("duration");
@@ -1264,6 +1312,7 @@ function cycleSort(key) {
                 repeatAll,
                 playbackMode,
                 volume: Number(volume.value || 75),
+                loudnessNormalize,
                 savedAt: Date.now(),
             };
             window.localStorage.setItem(playlistStorageKey, JSON.stringify(state));
@@ -1301,6 +1350,7 @@ function cycleSort(key) {
             repeatOne = Boolean(state.repeatOne);
             repeatAll = state.repeatAll === undefined ? repeatAll : Boolean(state.repeatAll);
             playbackMode = state.playbackMode === "shuffle" ? "shuffle" : "sequence";
+            loudnessNormalize = Boolean(state.loudnessNormalize);
 
             if (state.volume !== undefined && volume) {
                 volume.value = Math.min(100, Math.max(0, Number(state.volume) || 75));
@@ -1336,10 +1386,102 @@ function cycleSort(key) {
         return current && String(current.id) === String(song.id);
     }
 
+    function dbToGain(db) {
+        const n = Number(db);
+        if (!Number.isFinite(n)) return 1;
+        return Math.pow(10, n / 20);
+    }
+
+    function currentLoudnessGainDb() {
+        const song = getCurrentSong();
+        if (!song || !loudnessNormalize) return 0;
+        const gain = Number(song.loudness_gain_db);
+        if (!Number.isFinite(gain)) return 0;
+        return Math.min(6, Math.max(-12, gain));
+    }
+
+    function currentLoudnessLabel() {
+        const song = getCurrentSong();
+        if (!loudnessNormalize) return "LUFS 정규화 꺼짐";
+        if (!song) return "-14 LUFS 정규화 켜짐";
+
+        const gain = Number(song.loudness_gain_db);
+        const lufs = Number(song.integrated_lufs);
+        const tp = Number(song.true_peak_db);
+
+        if (!Number.isFinite(gain)) {
+            return "LUFS 미분석 곡: 기본 볼륨";
+        }
+
+        const sign = gain > 0 ? "+" : "";
+        const parts = [`gain ${sign}${gain.toFixed(1)} dB`];
+        if (Number.isFinite(lufs)) parts.push(`${lufs.toFixed(1)} LUFS`);
+        if (Number.isFinite(tp)) parts.push(`${tp.toFixed(1)} dBTP`);
+        return parts.join(" · ");
+    }
+
+    function ensureAudioGraph() {
+        if (webAudioReady || webAudioFailed) return webAudioReady;
+
+        try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) {
+                webAudioFailed = true;
+                return false;
+            }
+
+            audioContext = audioContext || new Ctx();
+            audioSourceNode = audioSourceNode || audioContext.createMediaElementSource(audio);
+            loudnessGainNode = loudnessGainNode || audioContext.createGain();
+            audioSourceNode.connect(loudnessGainNode);
+            loudnessGainNode.connect(audioContext.destination);
+            webAudioReady = true;
+            return true;
+        } catch (error) {
+            console.warn("Web Audio normalization unavailable; falling back to element volume", error);
+            webAudioFailed = true;
+            return false;
+        }
+    }
+
+    function resumeAudioContext() {
+        try {
+            if (audioContext && audioContext.state === "suspended") {
+                audioContext.resume();
+            }
+        } catch (error) {
+            console.warn("AudioContext resume failed", error);
+        }
+    }
+
+    function updateLoudnessUi() {
+        if (loudnessNormalizeBtn) {
+            loudnessNormalizeBtn.classList.toggle("active", loudnessNormalize);
+            loudnessNormalizeBtn.textContent = loudnessNormalize ? "-14 LUFS ON" : "-14 LUFS OFF";
+        }
+        if (loudnessStatus) {
+            loudnessStatus.textContent = currentLoudnessLabel();
+        }
+    }
+
     function updateVolume() {
-        const v = Number(volume.value || 80) / 100;
-        volumeText.textContent = `${Math.round(v * 100)}%`;
-        audio.volume = v;
+        const userVolume = Number(volume.value || 80) / 100;
+        const gainDb = currentLoudnessGainDb();
+        const gainMul = loudnessNormalize ? dbToGain(gainDb) : 1;
+        const canUseWebAudio = loudnessNormalize && ensureAudioGraph();
+
+        volumeText.textContent = `${Math.round(userVolume * 100)}%`;
+
+        if (canUseWebAudio && loudnessGainNode) {
+            audio.volume = userVolume;
+            loudnessGainNode.gain.value = gainMul;
+        } else {
+            // Fallback: this can cut loud tracks and modestly compensate quiet tracks,
+            // but HTMLMediaElement.volume cannot exceed 1.0.
+            audio.volume = Math.min(1, Math.max(0, userVolume * gainMul));
+        }
+
+        updateLoudnessUi();
     }
 
     function renderTable(filterText = "") {
@@ -1689,6 +1831,7 @@ function cycleSort(key) {
             lyricsPanel.classList.add("empty");
         }
 
+        updateVolume();
         refreshButtonsAndCovers();
     }
 
@@ -1714,12 +1857,22 @@ function cycleSort(key) {
 
         suppressStateSave = true;
         audio.pause();
+        if (loudnessNormalize) {
+            audio.crossOrigin = "anonymous";
+        } else {
+            audio.removeAttribute("crossorigin");
+        }
         audio.src = song.audio_url;
         audio.load();
         updateVolume();
         suppressStateSave = false;
 
         const startPlayback = () => {
+            if (loudnessNormalize) {
+                ensureAudioGraph();
+                resumeAudioContext();
+                updateVolume();
+            }
             audio.play()
                 .then(() => {
                     playBtn.textContent = "Ⅱ";
@@ -1771,6 +1924,11 @@ function cycleSort(key) {
         }
 
         if (audio.paused) {
+            if (loudnessNormalize) {
+                ensureAudioGraph();
+                resumeAudioContext();
+                updateVolume();
+            }
             audio.play()
                 .then(() => {
                     playBtn.textContent = "Ⅱ";
@@ -1905,6 +2063,18 @@ function cycleSort(key) {
         savePlaylistState();
     });
 
+    if (loudnessNormalizeBtn) {
+        loudnessNormalizeBtn.addEventListener("click", () => {
+            loudnessNormalize = !loudnessNormalize;
+            if (loudnessNormalize) {
+                ensureAudioGraph();
+                resumeAudioContext();
+            }
+            updateVolume();
+            savePlaylistState(true);
+        });
+    }
+
     progress.addEventListener("input", () => {
         if (!isFinite(audio.duration) || audio.duration <= 0) return;
 
@@ -1923,6 +2093,7 @@ function cycleSort(key) {
 
     audio.addEventListener("loadedmetadata", () => {
         durationEl.textContent = formatTime(audio.duration);
+        updateVolume();
     });
 
     audio.addEventListener("play", () => {
