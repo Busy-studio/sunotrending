@@ -5,7 +5,8 @@ import random
 import math
 import requests
 import pandas as pd
-from ranking_core import add_growth_features as core_add_growth_features, filter_active as core_filter_active, score_songs as core_score_songs
+from ranking_core import add_growth_features as core_add_growth_features, filter_active as core_filter_active, score_songs as core_score_songs, serialize_datetime_columns_for_csv
+from text_utils import clean_text, is_blank_value as text_is_blank_value, normalize_record_text, normalize_text_columns
 from update_public_song_pages import (
     get_archive_columns,
     load_history_for_archive,
@@ -155,26 +156,12 @@ def fetch_song_public(song_id):
         return None, repr(e)
 
 def clean_text_field(value):
-    if value is None:
+    if text_is_blank_value(value):
         return None
-
     if isinstance(value, (dict, list)):
         return None
-
-    s = str(value).strip()
-
-    if not s:
-        return None
-
-    if s.lower() in ["nan", "none", "null", "undefined"]:
-        return None
-
-    # Next.js / RSC 참조 토큰 제거: $5b, $12, $abc 같은 값
-    if s.startswith("$") and len(s) <= 8:
-        return None
-
-    return s
-
+    s = clean_text(value)
+    return s or None
 
 def flatten_song(song, old_row=None, source="top200_fast_update"):
     metadata = song.get("metadata") or {}
@@ -194,7 +181,7 @@ def flatten_song(song, old_row=None, source="top200_fast_update"):
         except Exception:
             pass
 
-    return {
+    row = {
         "id": song_id,
         "title": song.get("title"),
         "handle": song.get("handle"),
@@ -244,6 +231,7 @@ def flatten_song(song, old_row=None, source="top200_fast_update"):
         "source": old_source,
     }
 
+    return normalize_record_text(row)
 
 def history_snapshot(row):
     return {
@@ -385,6 +373,8 @@ def prune_old_songs_and_history(final_db):
             hist["id"] = hist["id"].astype(str)
             hist = hist[hist["id"].isin(kept_ids)].copy()
 
+            hist = normalize_text_columns(hist, columns=["title", "handle"])
+            hist = serialize_datetime_columns_for_csv(hist, columns=["checked_at", "created_at"])
             hist.to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")
 
             print(
@@ -413,6 +403,8 @@ def append_history(history_rows, final_db):
         hist["id"] = hist["id"].astype(str)
         hist = hist[hist["id"].isin(kept_ids)].copy()
 
+    hist = normalize_text_columns(hist, columns=["title", "handle"])
+    hist = serialize_datetime_columns_for_csv(hist, columns=["checked_at", "created_at"])
     hist.to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")
 
     return len(history_rows)
@@ -501,6 +493,8 @@ def main():
 
     final_db = prune_old_songs_and_history(final_db)
 
+    final_db = normalize_text_columns(final_db)
+    final_db = serialize_datetime_columns_for_csv(final_db)
     final_db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
 
     history_added = append_history(history_rows, final_db)

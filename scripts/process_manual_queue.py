@@ -24,6 +24,8 @@ from scripts.update_public_song_pages import (
     fetch_song_public,
     flatten_song,
 )
+from scripts.ranking_core import serialize_datetime_columns_for_csv
+from scripts.text_utils import normalize_text_columns, clean_text
 
 
 QUEUE_PATH = "data/manual_song_queue.csv"
@@ -78,6 +80,10 @@ def save_queue(q):
 
     for col in QUEUE_COLUMNS:
         q[col] = q[col].fillna("").astype(str)
+
+    for col in ["title", "error"]:
+        if col in q.columns:
+            q[col] = q[col].apply(clean_text)
 
     q.to_csv(QUEUE_PATH, index=False, encoding="utf-8-sig")
 
@@ -183,6 +189,11 @@ def main():
             print(f"[manual_queue FAIL] url={url} error={e}")
 
         time.sleep(REQUEST_SLEEP_SECONDS)
+
+    db = normalize_text_columns(db)
+    db = serialize_datetime_columns_for_csv(db)
+    hist = normalize_text_columns(hist, columns=["title", "handle"])
+    hist = serialize_datetime_columns_for_csv(hist, columns=["checked_at", "created_at"])
 
     db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
     hist.to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")

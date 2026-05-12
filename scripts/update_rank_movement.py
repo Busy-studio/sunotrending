@@ -2,6 +2,7 @@ import os
 import pandas as pd
 
 from ranking_core import filter_active, prepare_db, prepare_history, prepare_rankable_db, score_songs, serialize_datetime_columns_for_csv
+from text_utils import normalize_text_columns
 
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
@@ -164,6 +165,7 @@ def main():
     )
     db = dedupe_columns(db)
 
+    db = normalize_text_columns(db)
     db = serialize_datetime_columns_for_csv(db)
     db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
     print(f"[rank_movement] saved db_rows={len(db)} -> {DB_PATH}")

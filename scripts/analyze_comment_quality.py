@@ -7,6 +7,7 @@ import unicodedata
 from datetime import datetime, timezone
 
 import pandas as pd
+from text_utils import normalize_text_columns
 import requests
 
 from ranking_core import filter_active, score_songs
@@ -500,6 +501,7 @@ def main():
     else:
         quality_final = quality_new
 
+    quality_final = normalize_text_columns(quality_final, columns=["title", "handle", "comment_quality_summary"])
     quality_final.to_csv(QUALITY_PATH, index=False, encoding="utf-8-sig")
 
     check_quality = pd.read_csv(QUALITY_PATH)
@@ -543,6 +545,7 @@ def main():
 
         db = db.merge(update_quality, on="id", how="left")
 
+        db = normalize_text_columns(db)
         db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
 
         check_db = pd.read_csv(DB_PATH)

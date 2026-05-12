@@ -18,6 +18,8 @@ from scripts.update_public_song_pages import (
     flatten_song,
     history_snapshot,
 )
+from scripts.ranking_core import serialize_datetime_columns_for_csv
+from scripts.text_utils import normalize_text_columns
 
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
@@ -231,6 +233,11 @@ def main():
 
     final_db = upsert_song(db, new_row)
     final_hist = append_history(hist, new_row)
+
+    final_db = normalize_text_columns(final_db)
+    final_db = serialize_datetime_columns_for_csv(final_db)
+    final_hist = normalize_text_columns(final_hist, columns=["title", "handle"])
+    final_hist = serialize_datetime_columns_for_csv(final_hist, columns=["checked_at", "created_at"])
 
     final_db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
     final_hist.to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")

@@ -15,6 +15,15 @@ from ranking_core import (
     serialize_datetime_columns_for_csv,
 )
 
+from text_utils import (
+    clean_list_or_text as normalize_list_or_text,
+    clean_text,
+    is_blank_value as text_is_blank_value,
+    mojibake_report,
+    normalize_record_text,
+    normalize_text_columns,
+)
+
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
 ARCHIVE_PATH = "data/suno_song_archive.csv"
@@ -120,45 +129,15 @@ def get_archive_columns():
 
 
 def is_blank_value(value):
-    if value is None:
-        return True
-
-    try:
-        if pd.isna(value):
-            return True
-    except Exception:
-        pass
-
-    if isinstance(value, (dict,)):
-        return True
-
-    if isinstance(value, list):
-        return len(value) == 0
-
-    s = str(value).strip()
-
-    if not s:
-        return True
-
-    if s.lower() in ["nan", "none", "null", "undefined", "<na>", "-"]:
-        return True
-
-    # Next.js / RSC 참조 토큰 제거: $5b, $12, $abc 같은 값
-    if s.startswith("$") and len(s) <= 8:
-        return True
-
-    return False
-
+    return text_is_blank_value(value)
 
 def clean_text_field(value):
     if is_blank_value(value):
         return None
-
     if isinstance(value, (dict, list)):
         return None
-
-    return str(value).strip()
-
+    s = clean_text(value)
+    return s or None
 
 def first_non_empty(*values):
     for value in values:
@@ -182,15 +161,8 @@ def get_old_value(old_row, key, default=None):
 
 
 def clean_list_or_text(value):
-    if is_blank_value(value):
-        return None
-
-    if isinstance(value, list):
-        cleaned = [str(x).strip() for x in value if not is_blank_value(x)]
-        return ", ".join(cleaned) if cleaned else None
-
-    return str(value).strip()
-
+    s = normalize_list_or_text(value)
+    return s or None
 
 def get_nested_dict(obj, key):
     value = obj.get(key)
@@ -375,7 +347,7 @@ def flatten_song(song, old_row=None, source="public"):
 
     now_txt = now_iso()
 
-    return {
+    row = {
         "id": song_id,
         "title": title,
         "handle": handle,
@@ -485,6 +457,7 @@ def flatten_song(song, old_row=None, source="public"):
         "comment_quality_checked_at": get_old_value(old_row, "comment_quality_checked_at"),
     }
 
+    return normalize_record_text(row)
 
 def history_snapshot(row):
     return {
@@ -872,6 +845,7 @@ def archive_expired_songs(expired_db, scored_db):
         combined = combined.drop_duplicates(subset=["id"], keep="last")
 
     combined = serialize_datetime_columns_for_csv(combined)
+    combined = normalize_text_columns(combined)
     combined.to_csv(ARCHIVE_PATH, index=False, encoding="utf-8-sig")
     print(f"[archive] archived={len(archive)}, archive_rows={len(combined)} -> {ARCHIVE_PATH}")
 
@@ -923,6 +897,7 @@ def prune_old_songs_and_history(final_db):
             hist["id"] = hist["id"].astype(str)
             hist = hist[hist["id"].isin(kept_ids)].copy()
 
+            hist = normalize_text_columns(hist, columns=["title", "handle"])
             hist.to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")
 
             print(
@@ -1059,6 +1034,11 @@ def main():
     final_db = prune_old_songs_and_history(final_db)
 
     print(f"[after_prune] db_rows={len(final_db)}")
+
+    text_changes = mojibake_report(final_db)
+    if text_changes:
+        print(f"[text_normalize] db_mojibake_fixed={text_changes}")
+    final_db = normalize_text_columns(final_db)
 
     detail_field_report(final_db)
 
