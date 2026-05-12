@@ -1417,6 +1417,7 @@ function cycleSort(key) {
         const parts = [`gain ${sign}${gain.toFixed(1)} dB`];
         if (Number.isFinite(lufs)) parts.push(`${lufs.toFixed(1)} LUFS`);
         if (Number.isFinite(tp)) parts.push(`${tp.toFixed(1)} dBTP`);
+        if (gain > 0) parts.push("boost는 브라우저 볼륨 한도 내 적용");
         return parts.join(" · ");
     }
 
@@ -1468,18 +1469,18 @@ function cycleSort(key) {
         const userVolume = Number(volume.value || 80) / 100;
         const gainDb = currentLoudnessGainDb();
         const gainMul = loudnessNormalize ? dbToGain(gainDb) : 1;
-        const canUseWebAudio = loudnessNormalize && ensureAudioGraph();
 
         volumeText.textContent = `${Math.round(userVolume * 100)}%`;
 
-        if (canUseWebAudio && loudnessGainNode) {
-            audio.volume = userVolume;
-            loudnessGainNode.gain.value = gainMul;
-        } else {
-            // Fallback: this can cut loud tracks and modestly compensate quiet tracks,
-            // but HTMLMediaElement.volume cannot exceed 1.0.
-            audio.volume = Math.min(1, Math.max(0, userVolume * gainMul));
-        }
+        // IMPORTANT:
+        // Suno audio URLs can be cross-origin. Connecting a cross-origin
+        // HTMLAudioElement to Web Audio may produce silence in browsers unless
+        // the media response has the right CORS headers. To avoid muting playback,
+        // keep the main player on the native <audio> output path and apply the
+        // safe part of loudness normalization through element.volume.
+        // This fully supports cutting loud tracks. Positive boosts are applied
+        // only up to the browser volume ceiling of 1.0.
+        audio.volume = Math.min(1, Math.max(0, userVolume * gainMul));
 
         updateLoudnessUi();
     }
@@ -1857,22 +1858,16 @@ function cycleSort(key) {
 
         suppressStateSave = true;
         audio.pause();
-        if (loudnessNormalize) {
-            audio.crossOrigin = "anonymous";
-        } else {
-            audio.removeAttribute("crossorigin");
-        }
+        // Keep native audio output. Do not force crossOrigin here; some Suno
+        // media URLs may stop playing when anonymous CORS is requested.
+        audio.removeAttribute("crossorigin");
         audio.src = song.audio_url;
         audio.load();
         updateVolume();
         suppressStateSave = false;
 
         const startPlayback = () => {
-            if (loudnessNormalize) {
-                ensureAudioGraph();
-                resumeAudioContext();
-                updateVolume();
-            }
+            updateVolume();
             audio.play()
                 .then(() => {
                     playBtn.textContent = "Ⅱ";
@@ -1924,11 +1919,7 @@ function cycleSort(key) {
         }
 
         if (audio.paused) {
-            if (loudnessNormalize) {
-                ensureAudioGraph();
-                resumeAudioContext();
-                updateVolume();
-            }
+            updateVolume();
             audio.play()
                 .then(() => {
                     playBtn.textContent = "Ⅱ";
@@ -2066,10 +2057,6 @@ function cycleSort(key) {
     if (loudnessNormalizeBtn) {
         loudnessNormalizeBtn.addEventListener("click", () => {
             loudnessNormalize = !loudnessNormalize;
-            if (loudnessNormalize) {
-                ensureAudioGraph();
-                resumeAudioContext();
-            }
             updateVolume();
             savePlaylistState(true);
         });
