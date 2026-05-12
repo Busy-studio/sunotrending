@@ -40,20 +40,25 @@ REQUEST_USER_AGENT = os.getenv(
     "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
 )
 
-LOUDNESS_COLUMNS = [
+NUMERIC_LOUDNESS_COLUMNS = [
     "integrated_lufs",
     "true_peak_db",
     "loudness_gain_db",
     "loudness_target_lufs",
     "loudness_true_peak_ceiling_db",
-    "loudness_checked_at",
-    "loudness_status",
-    "loudness_error",
-    "loudness_audio_url_hash",
     "loudness_input_lra",
     "loudness_input_thresh",
     "loudness_target_offset",
 ]
+
+TEXT_LOUDNESS_COLUMNS = [
+    "loudness_checked_at",
+    "loudness_status",
+    "loudness_error",
+    "loudness_audio_url_hash",
+]
+
+LOUDNESS_COLUMNS = NUMERIC_LOUDNESS_COLUMNS + TEXT_LOUDNESS_COLUMNS
 
 
 def utc_now_iso() -> str:
@@ -166,10 +171,27 @@ def run_ffmpeg_loudnorm(audio_url: str) -> dict[str, Any]:
 
 
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure loudness columns exist with assignment-safe dtypes.
+
+    Pandas 3 can raise when assigning floats into columns that were created or
+    loaded as string dtype.  The loudnorm result contains numeric metadata, so
+    force numeric loudness columns to numeric dtypes before row updates.  Text
+    metadata stays as object strings.
+    """
     df = df.copy()
-    for col in LOUDNESS_COLUMNS:
+
+    for col in NUMERIC_LOUDNESS_COLUMNS:
+        if col not in df.columns:
+            df[col] = pd.NA
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    for col in TEXT_LOUDNESS_COLUMNS:
         if col not in df.columns:
             df[col] = ""
+        # Avoid pandas StringDtype assignment errors when writing mixed values
+        # after CSV round-trips.
+        df[col] = df[col].astype("object")
+
     return df
 
 
