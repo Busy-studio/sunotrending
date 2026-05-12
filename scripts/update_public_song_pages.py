@@ -27,6 +27,7 @@ from text_utils import (
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
 ARCHIVE_PATH = "data/suno_song_archive.csv"
+RANK_HISTORY_PATH = "data/suno_rank_history.csv"
 
 REQUEST_SLEEP_SECONDS = float(os.getenv("REQUEST_SLEEP_SECONDS", "1.2"))
 MAX_UPDATE_ROWS = int(os.getenv("MAX_UPDATE_ROWS", "1000"))
@@ -109,6 +110,21 @@ def ensure_data_files():
             encoding="utf-8-sig",
         )
 
+    if not os.path.exists(RANK_HISTORY_PATH):
+        pd.DataFrame(columns=get_rank_history_columns()).to_csv(
+            RANK_HISTORY_PATH,
+            index=False,
+            encoding="utf-8-sig",
+        )
+
+
+def get_rank_history_columns():
+    return [
+        "captured_at", "id", "rank",
+        "trend_score", "base_score", "growth_score", "freshness_score",
+        "play_count", "upvote_count", "comment_count", "adjusted_comment_count",
+    ]
+
 
 def get_archive_columns():
     return [
@@ -118,7 +134,9 @@ def get_archive_columns():
         "play_count", "upvote_count", "comment_count", "adjusted_comment_count",
         "comment_quality_ratio", "meaningful_count", "generic_count",
         "mention_only_count", "emoji_only_count", "flag_count",
-        "final_rank", "best_rank",
+        "final_rank", "best_rank", "best_rank_at",
+        "first_charted_at", "last_charted_at",
+        "top10_count", "top50_count", "top200_count", "chart_in_count",
         "final_trend_score", "final_base_score", "final_growth_score", "final_freshness_score",
         "best_trend_score", "best_score_at",
         "peak_play_count", "peak_upvote_count", "peak_comment_count", "peak_adjusted_comment_count",
@@ -768,6 +786,120 @@ def score_songs_for_archive(db, hist):
     ranked["computed_rank"] = range(1, len(ranked) + 1)
     return ranked
 
+
+def load_rank_history_for_archive():
+    if not os.path.exists(RANK_HISTORY_PATH):
+        return pd.DataFrame(columns=get_rank_history_columns())
+
+    try:
+        rank_hist = pd.read_csv(RANK_HISTORY_PATH)
+    except Exception as e:
+        print(f"[rank_history] failed to read for archive: {e}")
+        return pd.DataFrame(columns=get_rank_history_columns())
+
+    if rank_hist.empty:
+        return rank_hist
+
+    if "id" in rank_hist.columns:
+        rank_hist["id"] = rank_hist["id"].astype(str)
+    if "captured_at" in rank_hist.columns:
+        rank_hist["captured_at_dt"] = pd.to_datetime(rank_hist["captured_at"], errors="coerce", utc=True)
+
+    for col in [
+        "rank", "trend_score", "base_score", "growth_score", "freshness_score",
+        "play_count", "upvote_count", "comment_count", "adjusted_comment_count",
+    ]:
+        if col in rank_hist.columns:
+            rank_hist[col] = pd.to_numeric(rank_hist[col], errors="coerce")
+
+    return rank_hist
+
+
+def summarize_rank_history(rank_hist, song_ids):
+    cols = [
+        "id", "best_rank_history", "best_rank_at", "best_trend_score_history", "best_score_at_history",
+        "first_charted_at", "last_charted_at", "top10_count", "top50_count", "top200_count", "chart_in_count",
+    ]
+    if rank_hist is None or rank_hist.empty or "id" not in rank_hist.columns:
+        return pd.DataFrame(columns=cols)
+
+    wanted = set(str(x) for x in song_ids if not is_blank_value(x))
+    if not wanted:
+        return pd.DataFrame(columns=cols)
+
+    rh = rank_hist[rank_hist["id"].astype(str).isin(wanted)].copy()
+    if rh.empty:
+        return pd.DataFrame(columns=cols)
+
+    if "captured_at_dt" not in rh.columns:
+        rh["captured_at_dt"] = pd.to_datetime(rh.get("captured_at"), errors="coerce", utc=True)
+
+    rows = []
+    for song_id, g in rh.groupby("id", dropna=False):
+        g = g.copy()
+        rank = pd.to_numeric(g.get("rank"), errors="coerce")
+        score = pd.to_numeric(g.get("trend_score"), errors="coerce")
+        captured = g.get("captured_at_dt")
+
+        best_rank = rank.min(skipna=True)
+        best_rank_at = pd.NA
+        if rank.notna().any():
+            best_rank_idx = rank.idxmin()
+            best_rank_at = g.loc[best_rank_idx, "captured_at"] if "captured_at" in g.columns else pd.NA
+
+        best_score = score.max(skipna=True)
+        best_score_at = pd.NA
+        if score.notna().any():
+            best_score_idx = score.idxmax()
+            best_score_at = g.loc[best_score_idx, "captured_at"] if "captured_at" in g.columns else pd.NA
+
+        first_charted_at = pd.NA
+        last_charted_at = pd.NA
+        if captured is not None and captured.notna().any():
+            first_idx = captured.idxmin()
+            last_idx = captured.idxmax()
+            first_charted_at = g.loc[first_idx, "captured_at"] if "captured_at" in g.columns else pd.NA
+            last_charted_at = g.loc[last_idx, "captured_at"] if "captured_at" in g.columns else pd.NA
+
+        rows.append({
+            "id": str(song_id),
+            "best_rank_history": best_rank,
+            "best_rank_at": best_rank_at,
+            "best_trend_score_history": best_score,
+            "best_score_at_history": best_score_at,
+            "first_charted_at": first_charted_at,
+            "last_charted_at": last_charted_at,
+            "top10_count": int((rank <= 10).sum()),
+            "top50_count": int((rank <= 50).sum()),
+            "top200_count": int((rank <= 200).sum()),
+            "chart_in_count": int(rank.notna().sum()),
+        })
+
+    return pd.DataFrame(rows, columns=cols)
+
+
+def prune_rank_history_by_active_ids(kept_ids):
+    if not os.path.exists(RANK_HISTORY_PATH):
+        return
+
+    try:
+        rank_hist = pd.read_csv(RANK_HISTORY_PATH)
+    except Exception as e:
+        print(f"[rank_history_prune] failed to read: {e}")
+        return
+
+    if rank_hist.empty or "id" not in rank_hist.columns:
+        rank_hist.to_csv(RANK_HISTORY_PATH, index=False, encoding="utf-8-sig")
+        return
+
+    before = len(rank_hist)
+    rank_hist["id"] = rank_hist["id"].astype(str)
+    kept = rank_hist[rank_hist["id"].isin(set(str(x) for x in kept_ids))].copy()
+    kept = serialize_datetime_columns_for_csv(kept)
+    kept.to_csv(RANK_HISTORY_PATH, index=False, encoding="utf-8-sig")
+    print(f"[rank_history_prune] before={before}, after={len(kept)}, removed={before - len(kept)}")
+
+
 def archive_expired_songs(expired_db, scored_db):
     if expired_db.empty:
         return
@@ -775,6 +907,11 @@ def archive_expired_songs(expired_db, scored_db):
     archive_now = now_iso()
     expired = expired_db.copy()
     expired["id"] = expired["id"].astype(str)
+
+    rank_hist = load_rank_history_for_archive()
+    rank_summary = summarize_rank_history(rank_hist, expired["id"].dropna().astype(str).tolist())
+    if not rank_summary.empty:
+        expired = expired.merge(rank_summary, on="id", how="left")
 
     scored_cols = [
         "id", "computed_rank", "trend_score", "base_score", "growth_score", "freshness_score",
@@ -802,17 +939,34 @@ def archive_expired_songs(expired_db, scored_db):
         archive["best_rank"] = archive[["best_rank", "final_rank"]].min(axis=1, skipna=True)
     else:
         archive["best_rank"] = archive["final_rank"]
+    if "best_rank_history" in archive.columns:
+        archive["best_rank_history"] = pd.to_numeric(archive["best_rank_history"], errors="coerce")
+        archive["best_rank"] = archive[["best_rank", "best_rank_history"]].min(axis=1, skipna=True)
 
     if "best_trend_score" in archive.columns:
         archive["best_trend_score"] = pd.to_numeric(archive["best_trend_score"], errors="coerce")
         archive["best_trend_score"] = archive[["best_trend_score", "final_trend_score"]].max(axis=1, skipna=True)
     else:
         archive["best_trend_score"] = archive["final_trend_score"]
+    if "best_trend_score_history" in archive.columns:
+        archive["best_trend_score_history"] = pd.to_numeric(archive["best_trend_score_history"], errors="coerce")
+        archive["best_trend_score"] = archive[["best_trend_score", "best_trend_score_history"]].max(axis=1, skipna=True)
 
     if "best_score_at" not in archive.columns:
         archive["best_score_at"] = ""
     archive["best_score_at"] = archive["best_score_at"].fillna(archive_now)
     archive.loc[archive["best_score_at"].astype(str).str.strip().isin(["", "nan", "NaT", "None"]), "best_score_at"] = archive_now
+    if "best_score_at_history" in archive.columns:
+        history_score_at = archive["best_score_at_history"]
+        blank_score_at = archive["best_score_at"].astype(str).str.strip().isin(["", "nan", "NaT", "None", "<NA>"])
+        archive.loc[blank_score_at & history_score_at.notna(), "best_score_at"] = history_score_at
+
+    if "best_rank_at" not in archive.columns:
+        archive["best_rank_at"] = pd.NA
+
+    for count_col in ["top10_count", "top50_count", "top200_count", "chart_in_count"]:
+        if count_col in archive.columns:
+            archive[count_col] = pd.to_numeric(archive[count_col], errors="coerce").fillna(0).astype(int)
 
     peak_pairs = {
         "peak_play_count": "play_count",
@@ -904,6 +1058,8 @@ def prune_old_songs_and_history(final_db):
                 f"[prune_history_by_song_id] before={before_hist}, "
                 f"after={len(hist)}, removed={before_hist - len(hist)}"
             )
+
+    prune_rank_history_by_active_ids(kept_ids)
 
     return active_db
 

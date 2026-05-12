@@ -6,6 +6,7 @@ from text_utils import normalize_text_columns
 
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
+RANK_HISTORY_PATH = "data/suno_rank_history.csv"
 TOP_N = int(os.getenv("RANK_MOVEMENT_TOP_N", "200"))
 
 RANK_COLS = [
@@ -59,6 +60,76 @@ def load_history() -> pd.DataFrame:
     return prepare_history(hist)
 
 
+
+
+RANK_HISTORY_COLS = [
+    "captured_at", "id", "rank",
+    "trend_score", "base_score", "growth_score", "freshness_score",
+    "play_count", "upvote_count", "comment_count", "adjusted_comment_count",
+]
+
+
+def append_rank_history(ranked: pd.DataFrame) -> None:
+    """Append one lightweight Top-N chart snapshot and keep only active-window rows.
+
+    This is intentionally a chart-entry history, not a full-song history.
+    It stores only the current Top-N rows so archive can later summarize
+    best rank, best score, and Top 10/50/200 appearances without growing too fast.
+    """
+    captured_at = pd.Timestamp.now(tz="UTC")
+
+    if ranked is None or ranked.empty:
+        print("[rank_history] skipped: no ranked rows")
+        return
+
+    snap = pd.DataFrame({
+        "captured_at": captured_at.isoformat(),
+        "id": ranked["id"].astype(str),
+        "rank": pd.to_numeric(ranked["new_current_rank"], errors="coerce"),
+        "trend_score": pd.to_numeric(ranked["trend_score"], errors="coerce"),
+        "base_score": pd.to_numeric(ranked["base_score"], errors="coerce"),
+        "growth_score": pd.to_numeric(ranked["growth_score"], errors="coerce"),
+        "freshness_score": pd.to_numeric(ranked["freshness_score"], errors="coerce"),
+        "play_count": pd.to_numeric(ranked.get("play_count"), errors="coerce"),
+        "upvote_count": pd.to_numeric(ranked.get("upvote_count"), errors="coerce"),
+        "comment_count": pd.to_numeric(ranked.get("comment_count"), errors="coerce"),
+        "adjusted_comment_count": pd.to_numeric(ranked.get("effective_comment_count"), errors="coerce"),
+    })
+
+    if os.path.exists(RANK_HISTORY_PATH):
+        try:
+            old = pd.read_csv(RANK_HISTORY_PATH)
+        except Exception as exc:
+            print(f"[rank_history] failed to read old history, starting fresh: {exc}")
+            old = pd.DataFrame(columns=RANK_HISTORY_COLS)
+    else:
+        old = pd.DataFrame(columns=RANK_HISTORY_COLS)
+
+    for col in RANK_HISTORY_COLS:
+        if col not in old.columns:
+            old[col] = pd.NA
+        if col not in snap.columns:
+            snap[col] = pd.NA
+
+    combined = pd.concat([old[RANK_HISTORY_COLS], snap[RANK_HISTORY_COLS]], ignore_index=True)
+    combined["id"] = combined["id"].astype(str)
+    combined["captured_at_dt"] = pd.to_datetime(combined["captured_at"], errors="coerce", utc=True)
+
+    retention_days = int(os.getenv("SONG_RETENTION_DAYS", "4"))
+    # Keep a small buffer so songs expiring near the cutoff can still be summarized.
+    cutoff = captured_at - pd.Timedelta(days=max(retention_days, 1), hours=6)
+    combined = combined[combined["captured_at_dt"].isna() | (combined["captured_at_dt"] >= cutoff)].copy()
+
+    combined = combined.drop_duplicates(subset=["captured_at", "id"], keep="last")
+    combined = combined.drop(columns=["captured_at_dt"], errors="ignore")
+    combined = serialize_datetime_columns_for_csv(combined)
+    combined.to_csv(RANK_HISTORY_PATH, index=False, encoding="utf-8-sig")
+
+    print(
+        f"[rank_history] appended={len(snap)}, rows={len(combined)}, "
+        f"retention_days={retention_days} -> {RANK_HISTORY_PATH}"
+    )
+
 def main():
     db = load_db()
     hist = load_history()
@@ -100,6 +171,8 @@ def main():
         return "down"
 
     ranked["rank_status_new"] = ranked.apply(get_rank_status, axis=1)
+
+    append_rank_history(ranked)
 
     # Remove old rank/score columns before merging the new clean result.
     db = db.drop(columns=[c for c in RANK_COLS if c in db.columns], errors="ignore")
