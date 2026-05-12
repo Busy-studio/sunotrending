@@ -1,6 +1,7 @@
 import math
 import os
 import pandas as pd
+from pandas.api.types import is_datetime64_any_dtype
 
 RETENTION_HOURS = int(os.getenv("SONG_RETENTION_HOURS", "96"))
 MAX_AGE_DAYS = int(os.getenv("SONG_RETENTION_DAYS", "4"))
@@ -18,6 +19,18 @@ def to_number(series, default=0):
     return pd.to_numeric(series, errors="coerce").fillna(default)
 
 
+def parse_datetime_series(series: pd.Series) -> pd.Series:
+    """Parse a datetime Series robustly even when string formats are mixed."""
+    if is_datetime64_any_dtype(series):
+        return pd.to_datetime(series, errors="coerce", utc=True)
+    # Fast path for consistent strings; scalar fallback fixes mixed fractional/non-fractional strings.
+    parsed = pd.to_datetime(series, errors="coerce", utc=True)
+    missing = parsed.isna() & series.notna() & ~series.astype(str).str.strip().str.lower().isin(["", "nan", "none", "null", "<na>", "nat"])
+    if bool(missing.any()):
+        parsed.loc[missing] = series.loc[missing].apply(lambda x: pd.to_datetime(x, errors="coerce", utc=True))
+    return parsed
+
+
 def prepare_db(db: pd.DataFrame) -> pd.DataFrame:
     db = db.copy()
 
@@ -26,7 +39,7 @@ def prepare_db(db: pd.DataFrame) -> pd.DataFrame:
 
     for col in ["created_at", "first_seen_at", "last_checked_at", "comment_quality_checked_at"]:
         if col in db.columns:
-            db[col] = pd.to_datetime(db[col], errors="coerce", utc=True)
+            db[col] = parse_datetime_series(db[col])
 
     numeric_cols = [
         "play_count", "upvote_count", "comment_count", "flag_count",
@@ -74,7 +87,7 @@ def prepare_history(hist: pd.DataFrame | None) -> pd.DataFrame:
 
     for col in ["checked_at", "created_at"]:
         if col in hist.columns:
-            hist[col] = pd.to_datetime(hist[col], errors="coerce", utc=True)
+            hist[col] = parse_datetime_series(hist[col])
 
     for col in ["play_count", "upvote_count", "comment_count", "flag_count"]:
         if col in hist.columns:
@@ -84,6 +97,87 @@ def prepare_history(hist: pd.DataFrame | None) -> pd.DataFrame:
 
     return hist
 
+
+
+def restore_created_at_from_history(db: pd.DataFrame, hist: pd.DataFrame | None) -> pd.DataFrame:
+    """Fill missing DB created_at values from history snapshots.
+
+    This must run before scoring, rank movement, and archive pruning.
+    Some rows can temporarily lose created_at in the active DB while history still
+    preserves it; without this restore, Top 200 payload and saved DB ranks drift.
+    """
+    if db is None or db.empty:
+        return db
+
+    if hist is None or hist.empty:
+        return db.copy()
+
+    if "id" not in db.columns or "id" not in hist.columns or "created_at" not in hist.columns:
+        return db.copy()
+
+    out = db.copy()
+    hist = hist.copy()
+
+    if "created_at" not in out.columns:
+        out["created_at"] = pd.NaT
+
+    out["id"] = out["id"].astype(str)
+    hist["id"] = hist["id"].astype(str)
+
+    db_created = parse_datetime_series(out["created_at"])
+    hist_created = parse_datetime_series(hist["created_at"])
+    hist = hist.assign(__created_at_dt=hist_created).dropna(subset=["__created_at_dt"])
+
+    if hist.empty:
+        return out
+
+    # Original created_at should be stable. Use the earliest valid value seen.
+    created_map = hist.groupby("id")["__created_at_dt"].min()
+    missing = db_created.isna()
+    restored = out.loc[missing, "id"].map(created_map)
+    has_restored = restored.notna()
+
+    if bool(has_restored.any()):
+        restored_values = restored[has_restored].dt.tz_convert("UTC").dt.strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
+        out.loc[missing & has_restored, "created_at"] = restored_values
+
+    return out
+
+
+def prepare_rankable_db(db: pd.DataFrame, hist: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Prepare DB for every rank/archive/payload calculation using one rule set."""
+    prepared = prepare_db(db)
+    prepared = restore_created_at_from_history(prepared, hist)
+    return prepare_db(prepared)
+
+
+def serialize_datetime_columns_for_csv(df: pd.DataFrame, columns: list[str] | None = None) -> pd.DataFrame:
+    """Serialize datetime columns consistently before writing CSV.
+
+    Mixed timestamp strings like ``2026-05-11 16:03:56+00:00`` and
+    ``2026-05-11 16:03:56.123000+00:00`` can make pandas parse a few rows as
+    NaT on the next read. Always write UTC timestamps with microseconds.
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    if columns is None:
+        columns = ["created_at", "first_seen_at", "last_checked_at", "comment_quality_checked_at", "best_score_at"]
+
+    for col in columns:
+        if col not in out.columns:
+            continue
+        # Use scalar parsing to handle mixed ISO strings with/without fractional seconds.
+        parsed = parse_datetime_series(out[col])
+        valid = parsed.notna()
+        if not bool(valid.any()):
+            continue
+        formatted = parsed[valid].dt.tz_convert("UTC").dt.strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
+        out[col] = out[col].astype("object")
+        out.loc[valid, col] = formatted
+
+    return out
 
 def add_growth_features(db: pd.DataFrame, hist: pd.DataFrame, window_hours: int = GROWTH_WINDOW_HOURS) -> pd.DataFrame:
     db = db.copy()
@@ -107,7 +201,7 @@ def add_growth_features(db: pd.DataFrame, hist: pd.DataFrame, window_hours: int 
         db_created["created_at"] = pd.NaT
     db_created["id"] = db_created["id"].astype(str)
     db_created = db_created.rename(columns={"created_at": "song_created_at"})
-    db_created["song_created_at"] = pd.to_datetime(db_created["song_created_at"], errors="coerce", utc=True)
+    db_created["song_created_at"] = parse_datetime_series(db_created["song_created_at"])
 
     hist = hist.merge(db_created, on="id", how="left")
     rows = []
@@ -182,7 +276,7 @@ def score_songs(
     growth_window_hours: int = GROWTH_WINDOW_HOURS,
     freshness_power: float = FRESHNESS_POWER,
 ) -> pd.DataFrame:
-    view = prepare_db(db)
+    view = prepare_rankable_db(db, hist)
     now = pd.Timestamp.now(tz="UTC")
 
     if "created_at" not in view.columns:

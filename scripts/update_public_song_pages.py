@@ -7,6 +7,13 @@ import requests
 import pandas as pd
 from datetime import datetime, timezone
 
+from ranking_core import (
+    prepare_history,
+    restore_created_at_from_history as core_restore_created_at_from_history,
+    score_songs as core_score_songs,
+    serialize_datetime_columns_for_csv,
+)
+
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
 ARCHIVE_PATH = "data/suno_song_archive.csv"
@@ -719,16 +726,12 @@ def choose_rows_to_update(db):
 
 
 def restore_created_at_from_history(db):
-    """Fill missing active DB created_at from history snapshots."""
+    """Fill missing active DB created_at from history snapshots using the shared ranking core."""
     if db is None or db.empty:
         return db
 
     if not os.path.exists(HISTORY_PATH):
         print("[restore_created_at] skipped: history file missing")
-        return db
-
-    if "id" not in db.columns:
-        print("[restore_created_at] skipped: db id column missing")
         return db
 
     try:
@@ -737,44 +740,20 @@ def restore_created_at_from_history(db):
         print(f"[restore_created_at] skipped: failed to read history: {e}")
         return db
 
-    if hist.empty or "id" not in hist.columns or "created_at" not in hist.columns:
-        print("[restore_created_at] skipped: no usable history created_at")
-        return db
-
-    db = db.copy()
-    if "created_at" not in db.columns:
-        db["created_at"] = pd.NA
-
-    db["id"] = db["id"].astype(str)
-    hist["id"] = hist["id"].astype(str)
-
-    db_created = pd.to_datetime(db["created_at"], errors="coerce", utc=True)
-    before_valid = int(db_created.notna().sum())
-
-    hist_created = pd.to_datetime(hist["created_at"], errors="coerce", utc=True)
-    hist = hist.assign(__created_at_dt=hist_created).dropna(subset=["__created_at_dt"])
     if hist.empty:
-        print("[restore_created_at] skipped: all history created_at invalid")
+        print("[restore_created_at] skipped: empty history")
         return db
 
-    created_map = hist.groupby("id")["__created_at_dt"].min()
-    missing = db_created.isna()
-    restored = db.loc[missing, "id"].map(created_map)
-    has_restored = restored.notna()
-    restored_count = int(has_restored.sum())
+    before_valid = int(pd.to_datetime(db.get("created_at"), errors="coerce", utc=True).notna().sum()) if "created_at" in db.columns else 0
+    restored_db = core_restore_created_at_from_history(db, prepare_history(hist))
+    after_valid = int(pd.to_datetime(restored_db.get("created_at"), errors="coerce", utc=True).notna().sum()) if "created_at" in restored_db.columns else 0
 
-    if restored_count:
-        restored_values = restored[has_restored].dt.tz_convert("UTC").dt.strftime("%Y-%m-%d %H:%M:%S.%f+00:00")
-        db.loc[missing & has_restored, "created_at"] = restored_values
-
-    after_valid = int(pd.to_datetime(db["created_at"], errors="coerce", utc=True).notna().sum())
     print(
-        f"[restore_created_at] valid_before={before_valid}/{len(db)}, "
-        f"restored={restored_count}, valid_after={after_valid}/{len(db)}"
+        f"[restore_created_at] valid_before={before_valid}/{len(restored_db)}, "
+        f"restored={after_valid - before_valid}, valid_after={after_valid}/{len(restored_db)}"
     )
 
-    return db
-
+    return restored_db
 
 def to_number(series):
     return pd.to_numeric(series, errors="coerce").fillna(0)
@@ -846,56 +825,15 @@ def add_growth_features_for_archive(db, hist, window_hours):
 
 
 def score_songs_for_archive(db, hist):
-    view = db.copy()
-    now = pd.Timestamp.now(tz="UTC")
-
-    if "id" in view.columns:
-        view["id"] = view["id"].astype(str)
-
-    if "created_at" not in view.columns:
-        view["created_at"] = pd.NaT
-    view["created_at_dt"] = pd.to_datetime(view["created_at"], errors="coerce", utc=True)
-
-    view["age_hours"] = (now - view["created_at_dt"]).dt.total_seconds() / 3600
-    view["age_hours"] = view["age_hours"].clip(lower=0)
-    view["remaining_hours"] = (RETENTION_HOURS - view["age_hours"]).clip(lower=0)
-    view["freshness"] = (view["remaining_hours"] / RETENTION_HOURS).clip(lower=0, upper=1)
-    view["freshness_score"] = (view["freshness"] ** FRESHNESS_POWER) * FRESHNESS_WEIGHT
-
-    view = add_growth_features_for_archive(view, hist, GROWTH_WINDOW_HOURS)
-
-    for col in ["play_count", "upvote_count", "comment_count"]:
-        if col not in view.columns:
-            view[col] = 0
-        view[col] = to_number(view[col])
-
-    if "adjusted_comment_count" in view.columns:
-        view["effective_comment_count"] = pd.to_numeric(view["adjusted_comment_count"], errors="coerce")
-        view["effective_comment_count"] = view["effective_comment_count"].fillna(view["comment_count"])
-    else:
-        view["effective_comment_count"] = view["comment_count"]
-
-    view["effective_comment_count"] = view["effective_comment_count"].clip(lower=0)
-
-    view["base_score"] = (
-        PLAY_WEIGHT * view["play_count"].apply(lambda x: math.log1p(max(0, x)))
-        + LIKE_WEIGHT * view["upvote_count"].apply(lambda x: math.log1p(max(0, x)))
-        + COMMENT_WEIGHT * view["effective_comment_count"].apply(lambda x: math.log1p(max(0, x)))
-    )
-
-    view["growth_score_raw"] = (
-        0.4 * view["play_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 2.0 * view["upvote_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-        + 3.0 * view["comment_delta_window"].apply(lambda x: math.log1p(max(0, x)))
-    )
-    view["growth_score"] = view["growth_score_raw"] * GROWTH_WEIGHT
-    view["trend_score"] = view["base_score"] + view["growth_score"] + view["freshness_score"]
-
-    ranked = view.sort_values("trend_score", ascending=False, na_position="last").copy()
+    """Score archive candidates with the same shared ranking core used by payload/rank movement."""
+    hist_prepared = prepare_history(hist) if hist is not None and not hist.empty else pd.DataFrame()
+    ranked = core_score_songs(db, hist_prepared).sort_values(
+        "trend_score",
+        ascending=False,
+        na_position="last",
+    ).copy()
     ranked["computed_rank"] = range(1, len(ranked) + 1)
-
     return ranked
-
 
 def archive_expired_songs(expired_db, scored_db):
     if expired_db.empty:
@@ -973,6 +911,7 @@ def archive_expired_songs(expired_db, scored_db):
         combined["id"] = combined["id"].astype(str)
         combined = combined.drop_duplicates(subset=["id"], keep="last")
 
+    combined = serialize_datetime_columns_for_csv(combined)
     combined.to_csv(ARCHIVE_PATH, index=False, encoding="utf-8-sig")
     print(f"[archive] archived={len(archive)}, archive_rows={len(combined)} -> {ARCHIVE_PATH}")
 
@@ -1163,6 +1102,7 @@ def main():
 
     detail_field_report(final_db)
 
+    final_db = serialize_datetime_columns_for_csv(final_db)
     final_db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
 
     check_db = pd.read_csv(DB_PATH)

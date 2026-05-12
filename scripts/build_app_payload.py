@@ -14,6 +14,7 @@ from ranking_core import (
     PLAY_WEIGHT, LIKE_WEIGHT, COMMENT_WEIGHT, GROWTH_WEIGHT, FRESHNESS_WEIGHT,
     FRESHNESS_POWER, GROWTH_WINDOW_HOURS, MAX_AGE_DAYS,
     add_outlier_flags, prepare_db, prepare_history, score_songs,
+    restore_created_at_from_history as core_restore_created_at_from_history,
 )
 
 DATA_DIR = Path("data")
@@ -461,7 +462,7 @@ def main() -> None:
 
     # DB created_at 누락분은 history snapshot에서 먼저 복구한다.
     # 이 단계가 빠지면 5월 10일처럼 DB created_at만 빈 곡들이 Top 200 후보에서 사라질 수 있다.
-    db = restore_created_at_from_history(db, hist)
+    db = core_restore_created_at_from_history(db, hist)
 
     db = dedupe_columns(prepare_db(dedupe_columns(db)))
     hist = prepare_history(dedupe_columns(hist)) if not hist.empty else pd.DataFrame()

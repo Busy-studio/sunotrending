@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 
-from ranking_core import filter_active, prepare_db, prepare_history, score_songs
+from ranking_core import filter_active, prepare_db, prepare_history, prepare_rankable_db, score_songs, serialize_datetime_columns_for_csv
 
 DB_PATH = "data/suno_song_db.csv"
 HISTORY_PATH = "data/suno_song_history.csv"
@@ -61,6 +61,11 @@ def load_history() -> pd.DataFrame:
 def main():
     db = load_db()
     hist = load_history()
+
+    created_before = int(pd.to_datetime(db["created_at"], errors="coerce", utc=True).notna().sum()) if "created_at" in db.columns else 0
+    db = prepare_rankable_db(db, hist)
+    created_after = int(pd.to_datetime(db["created_at"], errors="coerce", utc=True).notna().sum()) if "created_at" in db.columns else 0
+    print(f"[rank_movement] restored_created_at={created_after - created_before}, valid_created_at={created_after}/{len(db)}")
 
     print(f"[rank_movement] db_rows={len(db)}")
     print(f"[rank_movement] hist_rows={len(hist)}")
@@ -159,6 +164,7 @@ def main():
     )
     db = dedupe_columns(db)
 
+    db = serialize_datetime_columns_for_csv(db)
     db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
     print(f"[rank_movement] saved db_rows={len(db)} -> {DB_PATH}")
     print(f"[rank_movement] ranked_rows={len(ranked)}")
