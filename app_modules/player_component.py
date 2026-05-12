@@ -928,6 +928,8 @@ def render_player_ranking_html(
     const tabsOrder = decodeB64Json("__TABS_ORDER_JSON_B64__", []);
     const defaultTabKey = __DEFAULT_TAB_KEY__;
 
+    const playlistStorageKey = "sunoTrending.playlist.v1";
+
     let playlist = [];
     let currentIndex = -1;
     let audio = new Audio();
@@ -1236,6 +1238,62 @@ function cycleSort(key) {
         }).join("");
     }
 
+    function savePlaylistState() {
+        try {
+            const currentSong = getCurrentSong();
+            const state = {
+                playlist,
+                currentSongId: currentSong ? String(currentSong.id) : null,
+                repeatOne,
+                repeatAll,
+                playbackMode,
+                volume: Number(volume.value || 75),
+            };
+            window.localStorage.setItem(playlistStorageKey, JSON.stringify(state));
+        } catch (error) {
+            console.warn("Failed to save playlist state", error);
+        }
+    }
+
+    function restorePlaylistState() {
+        try {
+            const raw = window.localStorage.getItem(playlistStorageKey);
+            if (!raw) return;
+
+            const state = JSON.parse(raw);
+            const restored = Array.isArray(state.playlist) ? state.playlist : [];
+
+            playlist = restored.filter(song => song && song.id && song.audio_url);
+            currentIndex = -1;
+
+            if (state.currentSongId) {
+                currentIndex = playlist.findIndex(song => String(song.id) === String(state.currentSongId));
+            }
+
+            if (currentIndex < 0 && playlist.length > 0) {
+                currentIndex = 0;
+            }
+
+            repeatOne = Boolean(state.repeatOne);
+            repeatAll = state.repeatAll === undefined ? repeatAll : Boolean(state.repeatAll);
+            playbackMode = state.playbackMode === "shuffle" ? "shuffle" : "sequence";
+
+            if (state.volume !== undefined && volume) {
+                volume.value = Math.min(100, Math.max(0, Number(state.volume) || 75));
+            }
+
+            if (currentIndex >= 0) {
+                loadCurrent(false);
+            } else {
+                updateNowPlaying(null);
+            }
+        } catch (error) {
+            console.warn("Failed to restore playlist state", error);
+            playlist = [];
+            currentIndex = -1;
+        }
+    }
+
     function getCurrentSong() {
         if (currentIndex < 0 || currentIndex >= playlist.length) return null;
         return playlist[currentIndex];
@@ -1426,6 +1484,7 @@ function cycleSort(key) {
 
         renderPlaylist();
         refreshButtonsAndCovers();
+        savePlaylistState();
 
         return true;
     }
@@ -1455,6 +1514,7 @@ function cycleSort(key) {
 
         renderPlaylist();
         refreshButtonsAndCovers();
+        savePlaylistState();
     }
 
     function togglePlaylist(id) {
@@ -1486,6 +1546,7 @@ function cycleSort(key) {
         } else {
             currentIndex = idx;
             loadCurrent(true);
+            savePlaylistState();
         }
     }
 
@@ -1562,6 +1623,7 @@ function cycleSort(key) {
         } else {
             currentIndex = idx;
             loadCurrent(true);
+            savePlaylistState();
         }
     }
 
@@ -1639,6 +1701,8 @@ function cycleSort(key) {
             playBtn.textContent = "▶";
             refreshButtonsAndCovers();
         }
+
+        savePlaylistState();
     }
 
     function togglePlay() {
@@ -1744,6 +1808,7 @@ function cycleSort(key) {
         }
 
         refreshModeButtons();
+        savePlaylistState();
     });
 
     repeatAllBtn.addEventListener("click", () => {
@@ -1754,16 +1819,19 @@ function cycleSort(key) {
         }
 
         refreshModeButtons();
+        savePlaylistState();
     });
 
     sequenceBtn.addEventListener("click", () => {
         playbackMode = "sequence";
         refreshModeButtons();
+        savePlaylistState();
     });
 
     shuffleBtn.addEventListener("click", () => {
         playbackMode = "shuffle";
         refreshModeButtons();
+        savePlaylistState();
     });
 
     clearBtn.addEventListener("click", () => {
@@ -1774,9 +1842,13 @@ function cycleSort(key) {
         updateNowPlaying(null);
         renderPlaylist();
         refreshButtonsAndCovers();
+        savePlaylistState();
     });
 
-    volume.addEventListener("input", updateVolume);
+    volume.addEventListener("input", () => {
+        updateVolume();
+        savePlaylistState();
+    });
 
     progress.addEventListener("input", () => {
         if (!isFinite(audio.duration) || audio.duration <= 0) return;
@@ -1986,7 +2058,7 @@ function cycleSort(key) {
             btn.className = "rank-view-tab";
             btn.dataset.tabKey = key;
             btn.textContent = getTabTitle(key, tab);
-            btn.addEventListener("click", () => activateRankTab(key, true));
+            btn.addEventListener("click", () => activateRankTab(key, false));
             rankViewTabs.appendChild(btn);
         });
 
@@ -2005,9 +2077,11 @@ function cycleSort(key) {
     if (!tabsInitialized) {
         renderTable("");
     }
+    restorePlaylistState();
     renderPlaylist();
     refreshModeButtons();
     updateVolume();
+    savePlaylistState();
     </script>
     """
 
