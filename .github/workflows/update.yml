@@ -58,6 +58,8 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
           pip install -r requirements.txt
 
       - name: Load latest data from data branch
@@ -73,6 +75,7 @@ jobs:
               suno_song_db.zip \
               suno_song_history.zip \
               suno_song_archive.zip \
+              suno_rank_history.zip \
               suno_app_payload.zip \
               manual_song_queue.csv
             do
@@ -109,6 +112,7 @@ jobs:
               "data/suno_song_db.csv",
               "data/suno_song_history.csv",
               "data/suno_song_archive.csv",
+              "data/suno_rank_history.csv",
               "data/manual_song_queue.csv",
           ]:
               print(f"[before] {path} exists={os.path.exists(path)}")
@@ -162,6 +166,7 @@ jobs:
           db_path = "data/suno_song_db.csv"
           hist_path = "data/suno_song_history.csv"
           archive_path = "data/suno_song_archive.csv"
+          rank_history_path = "data/suno_rank_history.csv"
           queue_path = "data/manual_song_queue.csv"
 
           if not os.path.exists(db_path):
@@ -171,7 +176,7 @@ jobs:
           db = pd.read_csv(db_path)
           print(f"[after] {db_path} rows={len(db)}")
 
-          for path in [hist_path, archive_path, queue_path]:
+          for path in [hist_path, archive_path, rank_history_path, queue_path]:
               if os.path.exists(path):
                   df = pd.read_csv(path)
                   print(f"[after] {path} rows={len(df)}")
@@ -216,6 +221,18 @@ jobs:
           FRESHNESS_POWER: "1.35"
         run: |
           python scripts/update_rank_movement.py
+
+      - name: Analyze loudness
+        env:
+          LOUDNESS_ANALYZE_MAX_ITEMS: "30"
+          LOUDNESS_PRIORITY_TOP_N: "300"
+          LOUDNESS_TARGET_LUFS: "-14.0"
+          LOUDNESS_TRUE_PEAK_CEILING_DB: "-1.0"
+          LOUDNESS_MAX_BOOST_DB: "6.0"
+          LOUDNESS_MAX_CUT_DB: "-12.0"
+          LOUDNESS_FFMPEG_TIMEOUT_SECONDS: "180"
+        run: |
+          python scripts/analyze_loudness.py
 
       - name: Build app payload
         env:
@@ -278,6 +295,10 @@ jobs:
               "freshness_score",
               "best_rank",
               "best_trend_score",
+              "integrated_lufs",
+              "true_peak_db",
+              "loudness_gain_db",
+              "loudness_status",
           ]:
               print(f"[quality after] has_{col}={col in db.columns}")
 
@@ -337,6 +358,7 @@ jobs:
             data/suno_song_db.zip \
             data/suno_song_history.zip \
             data/suno_song_archive.zip \
+            data/suno_rank_history.zip \
             data/suno_app_payload.zip \
             || true
 
@@ -353,6 +375,7 @@ jobs:
           rm -f data/suno_song_db.csv
           rm -f data/suno_song_history.csv
           rm -f data/suno_song_archive.csv
+          rm -f data/suno_rank_history.csv
           rm -f data/suno_comment_quality.csv
           rm -f data/suno_app_payload.json
 
@@ -396,6 +419,7 @@ jobs:
             suno_song_db.zip \
             suno_song_history.zip \
             suno_song_archive.zip \
+            suno_rank_history.zip \
             suno_app_payload.zip \
             manual_song_queue.csv
           do
@@ -413,6 +437,7 @@ jobs:
             suno_song_db.zip \
             suno_song_history.zip \
             suno_song_archive.zip \
+            suno_rank_history.zip \
             suno_app_payload.zip \
             manual_song_queue.csv
           do
