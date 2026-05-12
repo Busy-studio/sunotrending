@@ -741,16 +741,44 @@ def render_player_ranking(df, hist):
     )
 
 
+def render_manual_song_form():
+    st.markdown("### 수동 곡 추가")
+
+    with st.container(border=True):
+        with st.form("manual_add_song_form", clear_on_submit=True):
+            manual_suno_url = st.text_input(
+                "Suno song link",
+                placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
+                label_visibility="collapsed",
+            )
+
+            submit_col1, submit_col2 = st.columns([0.28, 0.72])
+
+            with submit_col1:
+                submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
+
+            with submit_col2:
+                st.caption("지원 링크: /song/... 또는 /s/...")
+
+        if submitted:
+            ok, msg = is_valid_suno_link(manual_suno_url)
+
+            if not ok:
+                st.warning(msg)
+            else:
+                ok, msg = queue_manual_song_url(manual_suno_url)
+
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+
 # ================================
 # Main
 # ================================
 
-st.title("Suno Chart v1.04.3")
-st.caption("Actions에서 미리 생성한 탭별 payload 기준으로 빠르게 표시합니다.")
-
-if st.button("데이터 새로고침"):
-    st.cache_data.clear()
-    st.rerun()
+st.title("Suno Chart v1.05")
 
 try:
     sync_remote_data_files(DATA_RAW_BASE_URL, GITHUB_RAW_TOKEN)
@@ -764,85 +792,8 @@ if payload:
     meta = payload.get("meta", {})
     tabs_payload = payload.get("tabs", {})
 
-    total_songs = meta.get("active_song_count", 0)
-    latest_created_txt = meta.get("newest_created_at", "-") or "-"
     last_checked_txt = meta.get("last_checked_at", "-") or "-"
-    generated_at_txt = meta.get("generated_at", "-") or "-"
-
-    left_top, right_top = st.columns([0.9, 1.1], gap="large")
-
-    with left_top:
-        st.markdown("### 데이터 정보")
-
-        with st.container(border=True):
-            row1_label, row1_value = st.columns([0.45, 0.55])
-            with row1_label:
-                st.caption("Active 곡 수")
-            with row1_value:
-                st.markdown(
-                    f"<div style='text-align:right; font-size:15px; font-weight:800;'>{int(total_songs or 0):,}</div>",
-                    unsafe_allow_html=True,
-                )
-
-            row2_label, row2_value = st.columns([0.45, 0.55])
-            with row2_label:
-                st.caption("최신 생성곡")
-            with row2_value:
-                st.markdown(
-                    f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{latest_created_txt}</div>",
-                    unsafe_allow_html=True,
-                )
-
-            row3_label, row3_value = st.columns([0.45, 0.55])
-            with row3_label:
-                st.caption("마지막 업데이트")
-            with row3_value:
-                st.markdown(
-                    f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{last_checked_txt}</div>",
-                    unsafe_allow_html=True,
-                )
-
-            row4_label, row4_value = st.columns([0.45, 0.55])
-            with row4_label:
-                st.caption("Payload 생성")
-            with row4_value:
-                st.markdown(
-                    f"<div style='text-align:right; font-size:13px; font-weight:800; white-space:nowrap;'>{generated_at_txt}</div>",
-                    unsafe_allow_html=True,
-                )
-
-    with right_top:
-        st.markdown("### 수동 곡 추가")
-
-        with st.container(border=True):
-            with st.form("manual_add_song_form", clear_on_submit=True):
-                manual_suno_url = st.text_input(
-                    "Suno song link",
-                    placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
-                    label_visibility="collapsed",
-                )
-
-                submit_col1, submit_col2 = st.columns([0.28, 0.72])
-
-                with submit_col1:
-                    submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
-
-                with submit_col2:
-                    st.caption("지원 링크: /song/... 또는 /s/...")
-
-            if submitted:
-                ok, msg = is_valid_suno_link(manual_suno_url)
-
-                if not ok:
-                    st.warning(msg)
-                else:
-                    ok, msg = queue_manual_song_url(manual_suno_url)
-
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-
+    st.caption(f"마지막 업데이트 {last_checked_txt}")
     st.divider()
 
     tabs_order = payload.get("tabs_order") or ["new_songs", "top200", "rain_crew"]
@@ -860,6 +811,7 @@ if payload:
             default_key="top200" if "top200" in tabs_order else tabs_order[0],
         )
 
+    render_manual_song_form()
     st.stop()
 
 if payload_error:
@@ -917,7 +869,7 @@ latest_created_txt = newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(n
 last_checked_txt = last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
 
 st.info("현재는 app payload가 없어 기존 계산 fallback으로 표시 중입니다. GitHub Actions가 한 번 실행되면 빨라집니다.")
-st.markdown(f"**Active 곡 수:** {total_songs:,} · **최신 생성곡:** {latest_created_txt} · **마지막 업데이트:** {last_checked_txt}")
+st.caption(f"마지막 업데이트 {last_checked_txt}")
 st.divider()
 
 new_songs_payload = build_song_payload(new_view)
@@ -954,3 +906,5 @@ render_player_ranking_payload_tabs(
     tabs_order=["new_songs", "top200", "rain_crew"],
     default_key="top200",
 )
+
+render_manual_song_form()

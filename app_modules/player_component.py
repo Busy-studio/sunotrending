@@ -659,6 +659,17 @@ def render_player_ranking_html(
         color: var(--text);
     }
 
+    .creator-link {
+        color: inherit;
+        text-decoration: none;
+        font-weight: 750;
+    }
+
+    .creator-link:hover {
+        color: var(--accent-dark);
+        text-decoration: underline;
+    }
+
     .num {
         text-align: right;
         white-space: nowrap;
@@ -1039,6 +1050,13 @@ def render_player_ranking_html(
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#039;");
+    }
+
+    function creatorProfileUrl(song) {
+        const rawHandle = String(song.handle || "").trim();
+        const handle = rawHandle.replace(/^@+/, "").trim();
+        if (!handle || handle === "-") return "";
+        return `https://suno.com/@${encodeURIComponent(handle)}`;
     }
 
     const TAB_LABEL_FALLBACKS = {
@@ -1534,6 +1552,11 @@ function cycleSort(key) {
                 ? `<div class="subtle">${escapeHtml(song.handle)}</div>`
                 : "";
 
+            const creatorUrl = creatorProfileUrl(song);
+            const creatorHtml = creatorUrl
+                ? `<a class="creator-link" href="${escapeHtml(creatorUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(song.creator)}</a>`
+                : escapeHtml(song.creator);
+
             const outlierClass = song.is_outlier ? "outlier-row" : "";
             const outlierBadge = song.is_outlier
                 ? `<span class="outlier-badge" title="${escapeHtml(song.outlier_reasons)}">⚠</span>`
@@ -1561,7 +1584,7 @@ function cycleSort(key) {
                         ${renderStyleTags(song.style_tags)}
                     </td>
                     <td class="creator">
-                        ${escapeHtml(song.creator)}
+                        ${creatorHtml}
                         ${handleHtml}
                     </td>
                     <td class="num">${formatInt(song.play_count)}</td>
