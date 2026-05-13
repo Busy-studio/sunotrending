@@ -201,14 +201,14 @@ def render_auth_status_bar():
                         saved = False
                         st.session_state["supabase_last_error"] = str(exc)
                     if saved:
-                        st.caption("Supabase 연결됨 · 사용자 프로필 저장 완료")
+                        st.caption("서버 연결됨 · 사용자 프로필 저장 완료")
                     else:
                         err = st.session_state.get("supabase_last_error", "")
-                        st.caption("Supabase 연결 확인 필요" + (f": {err[:120]}" if err else ""))
+                        st.caption("서버 연결 확인 필요" + (f": {err[:120]}" if err else ""))
                 else:
-                    st.caption("Supabase 연결됨 · 로그인 대기")
+                    st.caption("서버 연결됨 · 로그인 대기")
             else:
-                st.caption("Supabase Secrets 미설정: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 필요")
+                st.caption("서버 설정 미완료: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 필요")
 
         with col_right:
             if not login_available:
@@ -882,22 +882,45 @@ def render_manual_song_form():
 def build_cloud_playlist_config():
     """Browser-safe config for JS-only cloud playlist controls.
 
-    The JS player uses SUPABASE_ANON_KEY + SECURITY DEFINER RPC functions from
-    supabase/playlist_rpc.sql. This avoids Streamlit reruns while audio is playing.
+    Full JS player controls are shown only after login. Cloud save/load/delete uses
+    SUPABASE_ANON_KEY + SECURITY DEFINER RPC functions from
+    supabase/playlist_rpc.sql, avoiding Streamlit reruns while audio is playing.
     """
-    if not is_logged_in() or not is_supabase_configured():
-        return {"enabled": False, "message": "로그인 후 Cloud Playlist를 사용할 수 있습니다."}
+    logged_in = is_logged_in()
+
+    if not logged_in:
+        return {
+            "enabled": False,
+            "playerEnabled": False,
+            "message": "로그인 후 Cloud Playlist를 사용할 수 있습니다.",
+        }
+
+    if not is_supabase_configured():
+        return {
+            "enabled": False,
+            "playerEnabled": True,
+            "message": "서버 설정을 확인해야 합니다.",
+        }
 
     public_cfg = get_supabase_public_config()
     token = ensure_playlist_cloud_token()
     if not public_cfg.get("supabase_url") or not public_cfg.get("supabase_anon_key"):
-        return {"enabled": False, "message": "SUPABASE_ANON_KEY를 Streamlit Secrets에 추가해야 합니다."}
+        return {
+            "enabled": False,
+            "playerEnabled": True,
+            "message": "SUPABASE_ANON_KEY를 Streamlit Secrets에 추가해야 합니다.",
+        }
     if not token:
         err = st.session_state.get("supabase_last_error", "")
-        return {"enabled": False, "message": "Supabase playlist_rpc.sql 적용이 필요합니다." + (f" ({err[:120]})" if err else "")}
+        return {
+            "enabled": False,
+            "playerEnabled": True,
+            "message": "playlist_rpc.sql 적용이 필요합니다." + (f" ({err[:120]})" if err else ""),
+        }
 
     return {
         "enabled": True,
+        "playerEnabled": True,
         "supabaseUrl": public_cfg["supabase_url"].rstrip("/"),
         "anonKey": public_cfg["supabase_anon_key"],
         "playlistToken": token,

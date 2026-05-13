@@ -29,6 +29,13 @@ def render_player_ranking_html(
     title_html = html.escape(title)
     subtitle_html = html.escape(subtitle)
     default_tab_key_js = json.dumps(default_tab_key or "", ensure_ascii=False)
+
+    try:
+        _cloud_cfg_for_layout = json.loads(cloud_config_json or "{}")
+    except Exception:
+        _cloud_cfg_for_layout = {}
+    shell_extra_class = "" if _cloud_cfg_for_layout.get("playerEnabled") else " public-mode"
+
     html_template = """
     <style>
     :root {
@@ -60,19 +67,32 @@ def render_player_ranking_html(
         grid-template-columns: 330px minmax(720px, 1fr);
         gap: 16px;
         width: 100%;
-        min-height: 1200px;
+        height: 1200px;
+        min-height: 0;
+        align-items: stretch;
+    }
+
+    .app-shell.public-mode {
+        grid-template-columns: minmax(720px, 1fr);
+    }
+
+    .app-shell.public-mode .player-panel {
+        display: none;
     }
 
     .player-panel {
         position: sticky;
         top: 0;
-        align-self: start;
+        align-self: stretch;
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 18px;
         padding: 14px;
-        height: 1200px;
-        overflow-y: auto;
+        height: 100%;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
     }
 
     .now-cover-wrap {
@@ -484,6 +504,10 @@ def render_player_ranking_html(
         border-radius: 18px;
         overflow: hidden;
         background: #ffffff;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
     }
 
     .ranking-topbar {
@@ -550,8 +574,14 @@ def render_player_ranking_html(
     .table-wrap {
         width: 100%;
         overflow-x: auto;
-        max-height: 1120px;
         overflow-y: auto;
+        flex: 1;
+        min-height: 0;
+    }
+
+    .app-shell.public-mode .select-col,
+    .app-shell.public-mode .select-cell {
+        display: none;
     }
 
     table.song-table {
@@ -905,21 +935,25 @@ def render_player_ranking_html(
     .footer-credit a:hover { text-decoration: underline; }
 
     @media (max-width: 980px) {
-        .app-shell { grid-template-columns: 1fr; }
+        .app-shell {
+            grid-template-columns: 1fr;
+            height: auto;
+            min-height: 0;
+        }
 
         .player-panel {
             position: relative;
-            height: auto;
+            height: 1180px;
             max-height: none;
         }
 
-        .playlist { height: 220px; }
+        .playlist { min-height: 180px; }
         .lyrics-panel { height: 180px; }
         .score-grid { grid-template-columns: repeat(2, 1fr); }
     }
     </style>
 
-    <div class="app-shell">
+    <div class="app-shell{shell_extra_class}" id="appShell">
         <aside class="player-panel">
             <div class="now-cover-wrap" id="nowCoverWrap">
                 <div class="now-placeholder">No track selected</div>
@@ -977,7 +1011,7 @@ def render_player_ranking_html(
                     <button class="cloud-playlist-mini-btn" id="cloudLoadPlaylistBtn">불러오기</button>
                     <button class="cloud-playlist-mini-btn" id="cloudDeletePlaylistBtn">삭제</button>
                 </div>
-                <div class="cloud-playlist-status" id="cloudPlaylistStatus">로그인 후 현재 JS 플레이리스트를 Supabase에 저장할 수 있습니다.</div>
+                <div class="cloud-playlist-status" id="cloudPlaylistStatus">로그인 후 현재 JS 플레이리스트를 서버에 저장할 수 있습니다.</div>
             </div>
 
             <div class="playlist-head">
@@ -1007,7 +1041,7 @@ def render_player_ranking_html(
                 <table class="song-table">
                     <thead>
                         <tr>
-                            <th style="width:46px; text-align:center;">선택</th>
+                            <th class="select-col" style="width:46px; text-align:center;">선택</th>
                             <th class="sortable" data-sort-key="rank" style="width:42px; text-align:right;">순위<span class="sort-indicator"></span></th>
                             <th class="sortable" data-sort-key="rank_change" style="width:58px; text-align:center;">변동<span class="sort-indicator"></span></th>
                             <th class="sortable" data-sort-key="has_image" style="width:76px;">앨범<span class="sort-indicator"></span></th>
@@ -1089,6 +1123,7 @@ def render_player_ranking_html(
     const tabsOrder = decodeB64Json("__TABS_ORDER_JSON_B64__", []);
     const defaultTabKey = __DEFAULT_TAB_KEY__;
     const cloudConfig = decodeB64Json("__CLOUD_CONFIG_JSON_B64__", {});
+    const playerEnabled = Boolean(cloudConfig && cloudConfig.playerEnabled);
 
     const playlistStorageKey = "sunoTrending.playlist.v1";
     const cloudLoadRequestStorageKey = "sunoTrending.cloudLoad.request.v1";
@@ -1506,7 +1541,7 @@ function cycleSort(key) {
             try { data = JSON.parse(text); } catch (e) { data = text; }
         }
         if (!res.ok) {
-            const msg = data && data.message ? data.message : String(text || res.statusText || "Supabase RPC failed");
+            const msg = data && data.message ? data.message : String(text || res.statusText || "Server RPC failed");
             throw new Error(msg);
         }
         return data;
@@ -1656,6 +1691,7 @@ function cycleSort(key) {
     }
 
     function savePlaylistState(force = false) {
+        if (!playerEnabled) return;
         if (suppressStateSave && !force) return;
 
         try {
@@ -2101,6 +2137,11 @@ function cycleSort(key) {
     }
 
     function togglePlaylist(id) {
+        if (!playerEnabled) {
+            coverClick(id);
+            return;
+        }
+
         const exists = playlist.some(s => String(s.id) === String(id));
 
         if (exists) {
@@ -2114,6 +2155,11 @@ function cycleSort(key) {
         const song = getSongById(id);
 
         if (!song) return;
+
+        if (!playerEnabled) {
+            publicCoverClick(song);
+            return;
+        }
 
         if (!playlist.some(s => String(s.id) === String(id))) {
             const added = addToPlaylist(id);
@@ -2131,6 +2177,23 @@ function cycleSort(key) {
             loadCurrent(true);
             savePlaylistState();
         }
+    }
+
+    function publicCoverClick(song) {
+        if (!song || !song.audio_url) {
+            alert("이 곡에는 audio_url이 없습니다.");
+            return;
+        }
+
+        const sameSong = currentSong && String(currentSong.id) === String(song.id);
+        if (sameSong) {
+            togglePlay();
+            return;
+        }
+
+        playlist = [song];
+        currentIndex = 0;
+        loadCurrent(true, { skipInitialSave: true });
     }
 
     function renderPlaylist() {
@@ -2719,8 +2782,10 @@ function cycleSort(key) {
     if (!tabsInitialized) {
         renderTable("");
     }
-    restorePlaylistState();
-    refreshCloudPlaylistList(true);
+    if (playerEnabled) {
+        restorePlaylistState();
+        refreshCloudPlaylistList(true);
+    }
     renderPlaylist();
     refreshModeButtons();
     updateVolume();
@@ -2736,6 +2801,7 @@ function cycleSort(key) {
         html_template
         .replace("{title_html}", title_html)
         .replace("{subtitle_html}", subtitle_html)
+        .replace("{shell_extra_class}", shell_extra_class)
         .replace("__SONGS_JSON_B64__", _b64_json_payload(songs_json))
         .replace("__HISTORIES_JSON_B64__", _b64_json_payload(histories_json))
         .replace("__RANKING_CONFIG_JSON_B64__", _b64_json_payload(ranking_config_json))
@@ -2747,8 +2813,8 @@ function cycleSort(key) {
 
     components.html(
         full_html,
-        height=1500,
-        scrolling=True,
+        height=1220,
+        scrolling=False,
     )
 
 
