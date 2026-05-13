@@ -14,6 +14,7 @@
     const SAVE_REQUEST_KEY = "sunoTrending.cloudSaveRequest.v1";
     const LAST_SENT_KEY = "sunoTrending.cloudSaveRequest.lastSent.v1";
     const LOAD_APPLIED_KEY = "sunoTrending.cloudLoad.applied.v1";
+    const LOAD_REQUEST_KEY = "sunoTrending.cloudLoad.request.v1";
 
     let renderArgs = {};
     let lastSentInMemory = "";
@@ -58,6 +59,11 @@
 
       try {
         window.localStorage.setItem(PLAYLIST_KEY, JSON.stringify(loadState));
+        window.localStorage.setItem(LOAD_REQUEST_KEY, JSON.stringify({
+          loadRequestId,
+          state: loadState,
+          at: Date.now(),
+        }));
         window.localStorage.setItem(LOAD_APPLIED_KEY, loadRequestId);
         status("playlist loaded into browser");
         setComponentValue({

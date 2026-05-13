@@ -1049,6 +1049,7 @@ def render_player_ranking_html(
     const defaultTabKey = __DEFAULT_TAB_KEY__;
 
     const playlistStorageKey = "sunoTrending.playlist.v1";
+    const cloudLoadRequestStorageKey = "sunoTrending.cloudLoad.request.v1";
 
     let playlist = [];
     let currentIndex = -1;
@@ -1061,6 +1062,7 @@ def render_player_ranking_html(
     let loudnessNormalize = false;
     let suppressStateSave = false;
     let lastStateSaveAt = 0;
+    let lastCloudLoadRequestId = "";
 
     let repeatOne = false;
     let repeatAll = true;
@@ -1496,47 +1498,87 @@ function cycleSort(key) {
         savePlaylistState();
     }
 
+    function applyPlaylistState(state, options = {}) {
+        const restored = Array.isArray(state && state.playlist) ? state.playlist : [];
+
+        playlist = restored.filter(song => song && song.id && song.audio_url);
+        currentIndex = -1;
+
+        if (state && state.currentSongId) {
+            currentIndex = playlist.findIndex(song => String(song.id) === String(state.currentSongId));
+        }
+
+        if (currentIndex < 0 && playlist.length > 0) {
+            currentIndex = 0;
+        }
+
+        repeatOne = Boolean(state && state.repeatOne);
+        repeatAll = !state || state.repeatAll === undefined ? repeatAll : Boolean(state.repeatAll);
+        playbackMode = state && state.playbackMode === "shuffle" ? "shuffle" : "sequence";
+        loudnessNormalize = Boolean(state && state.loudnessNormalize);
+
+        if (state && state.volume !== undefined && volume) {
+            volume.value = Math.min(100, Math.max(0, Number(state.volume) || 75));
+        }
+
+        if (currentIndex >= 0) {
+            loadCurrent(false, {
+                restoreTime: Number((state && state.currentTime) || 0),
+                restoreAutoplay: Boolean(state && state.isPlaying && options.allowAutoplay),
+                skipInitialSave: true,
+            });
+        } else {
+            audio.pause();
+            audio.removeAttribute("src");
+            progress.value = 0;
+            currentTimeEl.textContent = "0:00";
+            durationEl.textContent = "0:00";
+            updateNowPlaying(null);
+            playBtn.textContent = "▶";
+        }
+
+        renderPlaylist();
+        refreshButtonsAndCovers();
+        refreshModeButtons();
+        updateVolume();
+
+        if (options.persist) {
+            savePlaylistState(true);
+        }
+    }
+
     function restorePlaylistState() {
         try {
             const raw = window.localStorage.getItem(playlistStorageKey);
             if (!raw) return;
-
-            const state = JSON.parse(raw);
-            const restored = Array.isArray(state.playlist) ? state.playlist : [];
-
-            playlist = restored.filter(song => song && song.id && song.audio_url);
-            currentIndex = -1;
-
-            if (state.currentSongId) {
-                currentIndex = playlist.findIndex(song => String(song.id) === String(state.currentSongId));
-            }
-
-            if (currentIndex < 0 && playlist.length > 0) {
-                currentIndex = 0;
-            }
-
-            repeatOne = Boolean(state.repeatOne);
-            repeatAll = state.repeatAll === undefined ? repeatAll : Boolean(state.repeatAll);
-            playbackMode = state.playbackMode === "shuffle" ? "shuffle" : "sequence";
-            loudnessNormalize = Boolean(state.loudnessNormalize);
-
-            if (state.volume !== undefined && volume) {
-                volume.value = Math.min(100, Math.max(0, Number(state.volume) || 75));
-            }
-
-            if (currentIndex >= 0) {
-                loadCurrent(false, {
-                    restoreTime: Number(state.currentTime || 0),
-                    restoreAutoplay: Boolean(state.isPlaying),
-                    skipInitialSave: true,
-                });
-            } else {
-                updateNowPlaying(null);
-            }
+            applyPlaylistState(JSON.parse(raw), { allowAutoplay: true, persist: false });
         } catch (error) {
             console.warn("Failed to restore playlist state", error);
             playlist = [];
             currentIndex = -1;
+        }
+    }
+
+    function applyCloudPlaylistLoadRequest(force = false) {
+        try {
+            const raw = window.localStorage.getItem(cloudLoadRequestStorageKey);
+            if (!raw) return;
+
+            const request = JSON.parse(raw);
+            const requestId = String(request.loadRequestId || request.at || "");
+            if (!requestId) return;
+            if (!force && requestId === lastCloudLoadRequestId) return;
+
+            lastCloudLoadRequestId = requestId;
+            const state = request.state || request.loadState || request;
+            applyPlaylistState(state, { allowAutoplay: false, persist: true });
+
+            if (typeof updateCloudPlaylistStatus === "function") {
+                const count = Array.isArray(state.playlist) ? state.playlist.length : 0;
+                updateCloudPlaylistStatus(`클라우드 플레이리스트 불러오기 완료 (${count}곡)`);
+            }
+        } catch (error) {
+            console.warn("Failed to apply cloud playlist load request", error);
         }
     }
 
@@ -2466,6 +2508,13 @@ function cycleSort(key) {
         return false;
     }
 
+    window.addEventListener("storage", event => {
+        if (event.key === cloudLoadRequestStorageKey) {
+            applyCloudPlaylistLoadRequest(true);
+        }
+    });
+    setInterval(() => applyCloudPlaylistLoadRequest(false), 800);
+
     window.addEventListener("pagehide", () => savePlaylistState(true));
     window.addEventListener("beforeunload", () => savePlaylistState(true));
 
@@ -2475,6 +2524,7 @@ function cycleSort(key) {
         renderTable("");
     }
     restorePlaylistState();
+    applyCloudPlaylistLoadRequest(false);
     renderPlaylist();
     refreshModeButtons();
     updateVolume();

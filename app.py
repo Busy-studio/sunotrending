@@ -364,23 +364,6 @@ def render_auth_status_bar():
                     except Exception as exc:
                         st.error(f"로그인 설정을 확인하세요: {exc}")
 
-    if is_logged_in() and supabase_ready:
-        with st.expander("내 플레이리스트 / Supabase 상태", expanded=False):
-            playlists = list_playlists()
-            if playlists:
-                st.write("저장된 플레이리스트")
-                st.dataframe(
-                    pd.DataFrame(playlists)[["name", "visibility", "updated_at", "created_at"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.caption("아직 저장된 플레이리스트가 없습니다. 다음 단계에서 현재 재생목록 저장 버튼을 연결하면 여기에 표시됩니다.")
-
-            err = st.session_state.get("supabase_last_error", "")
-            if err:
-                st.warning(err)
-
 
 def inject_chart_selector_css():
     # Streamlit radio를 기존 HTML 내부 탭(.rank-view-tab)과 비슷한 pill 버튼 스타일로 보이게 만든다.
