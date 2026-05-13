@@ -69,7 +69,7 @@ OUTLIER_USE_LOG = True
 
 
 st.set_page_config(
-    page_title="Busy's Suno Chart",
+    page_title="Suno Chart",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -930,7 +930,7 @@ def build_cloud_playlist_config():
 # Main
 # ================================
 
-st.title("Busy's Suno Chart v1.06")
+st.title("Suno Chart v1.05")
 render_auth_status_bar()
 
 try:

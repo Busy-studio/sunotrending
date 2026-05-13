@@ -1,0 +1,2 @@
+pandas
+supabase>=2.0.0
