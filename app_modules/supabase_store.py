@@ -343,3 +343,59 @@ def refresh_song_stats(song_id: str) -> bool:
     except Exception as exc:
         st.session_state["supabase_last_error"] = str(exc)
         return False
+
+# ================================
+# Browser-side playlist RPC support
+# ================================
+
+def get_supabase_public_config() -> Dict[str, str]:
+    """Return browser-safe Supabase config for the JS player.
+
+    SUPABASE_ANON_KEY is safe to expose in browser code when paired with RLS/RPC.
+    The service role key is never exposed.
+    """
+    return {
+        "supabase_url": str(st.secrets.get("SUPABASE_URL", "") or ""),
+        "supabase_anon_key": str(st.secrets.get("SUPABASE_ANON_KEY", "") or ""),
+    }
+
+
+def ensure_playlist_cloud_token() -> str:
+    """Create/read a per-user random token used by browser RPC playlist calls.
+
+    Requires the SQL migration in supabase/playlist_rpc.sql.
+    Returns an empty string when the column/migration has not been applied yet.
+    """
+    import secrets
+
+    sb = get_supabase_client()
+    profile = get_current_user_profile()
+    if not sb or not profile:
+        return ""
+
+    user_id = profile["user_id"]
+    try:
+        existing = (
+            sb.table("user_profiles")
+            .select("playlist_cloud_token")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            token = str((existing.data[0] or {}).get("playlist_cloud_token") or "")
+            if token:
+                return token
+
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc).isoformat()
+        payload = {
+            **profile,
+            "playlist_cloud_token": token,
+            "last_login_at": now,
+        }
+        sb.table("user_profiles").upsert(payload, on_conflict="user_id").execute()
+        return token
+    except Exception as exc:
+        st.session_state["supabase_last_error"] = str(exc)
+        return ""

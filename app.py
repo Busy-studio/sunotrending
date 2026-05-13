@@ -15,16 +15,13 @@ from app_modules.data_loader import (
 )
 from app_modules.manual_queue import is_valid_suno_link, queue_manual_song_url
 from app_modules.player_component import render_player_ranking_html
-from app_modules.playlist_bridge import suno_playlist_bridge
 from app_modules.supabase_store import (
-    create_playlist,
-    delete_playlist,
+    ensure_playlist_cloud_token,
     get_current_user_profile,
-    get_playlist_items,
+    get_supabase_public_config,
     is_login_available,
     is_logged_in,
     is_supabase_configured,
-    list_playlists,
     upsert_user_profile,
 )
 from app_modules.text_utils import (
@@ -154,147 +151,9 @@ def collect_payload_song_lookup(tabs_payload):
     return lookup
 
 
-def build_browser_playlist_state(song_ids, song_lookup):
-    """Create the exact localStorage state consumed by the JS player."""
-    playlist = []
-    for song_id in song_ids or []:
-        song = song_lookup.get(str(song_id))
-        if not song:
-            continue
-        if not song.get("audio_url"):
-            continue
-        playlist.append(song)
-
-    first_id = str(playlist[0].get("id")) if playlist else None
-    return {
-        "playlist": playlist,
-        "currentSongId": first_id,
-        "currentTime": 0,
-        "duration": 0,
-        "isPlaying": False,
-        "audioSrc": playlist[0].get("audio_url") if playlist else None,
-        "repeatOne": False,
-        "repeatAll": True,
-        "playbackMode": "sequence",
-        "volume": 80,
-        "loudnessNormalize": False,
-        "savedAt": int(pd.Timestamp.utcnow().timestamp() * 1000),
-    }
-
-
-def _processed_playlist_request_ids():
-    ids = st.session_state.get("processed_playlist_request_ids")
-    if not isinstance(ids, set):
-        ids = set(ids or [])
-        st.session_state["processed_playlist_request_ids"] = ids
-    return ids
-
-
-def process_playlist_bridge_event(event):
-    """Handle playlist events returned from the browser bridge."""
-    if not event or not isinstance(event, dict):
-        return
-
-    event_type = event.get("type")
-    if event_type == "bridge_error":
-        st.session_state["playlist_cloud_status"] = f"Playlist bridge error: {event.get('message', '')}"
-        return
-
-    if event_type == "load_applied":
-        st.session_state["playlist_cloud_status"] = f"브라우저 플레이어에 플레이리스트를 불러왔습니다. ({event.get('playlistLength', 0)}곡)"
-        return
-
-    if event_type != "save_playlist":
-        return
-
-    if not is_logged_in():
-        st.session_state["playlist_cloud_status"] = "로그인 후 플레이리스트를 저장할 수 있습니다."
-        return
-
-    req_id = str(event.get("requestId") or "")
-    if not req_id:
-        return
-
-    processed = _processed_playlist_request_ids()
-    if req_id in processed:
-        return
-
-    request = event.get("request") or {}
-    name = clean_payload_text(request.get("name") or "My Playlist") or "My Playlist"
-    playlist = request.get("playlist") or []
-    song_ids = []
-    for item in playlist:
-        if isinstance(item, dict) and item.get("id"):
-            sid = str(item.get("id")).strip()
-            if sid and sid not in song_ids:
-                song_ids.append(sid)
-
-    if not song_ids:
-        st.session_state["playlist_cloud_status"] = "저장할 곡 ID를 찾지 못했습니다."
-        processed.add(req_id)
-        return
-
-    playlist_id = create_playlist(name, song_ids)
-    processed.add(req_id)
-
-    if playlist_id:
-        st.session_state["playlist_cloud_status"] = f"'{name}' 플레이리스트 저장 완료 · {len(song_ids)}곡"
-    else:
-        err = st.session_state.get("supabase_last_error", "")
-        st.session_state["playlist_cloud_status"] = "플레이리스트 저장 실패" + (f": {err[:160]}" if err else "")
-
-
-def render_cloud_playlist_panel(song_lookup):
-    """Render Supabase playlist controls and the hidden JS bridge."""
-    load_state = st.session_state.pop("pending_playlist_load_state", None)
-    load_request_id = st.session_state.pop("pending_playlist_load_request_id", "")
-
-    if is_supabase_configured():
-        event = suno_playlist_bridge(
-            load_state=load_state,
-            load_request_id=load_request_id,
-            key="suno_playlist_bridge_main",
-        )
-        process_playlist_bridge_event(event)
-
-    if not is_logged_in() or not is_supabase_configured():
-        return
-
-    status = st.session_state.get("playlist_cloud_status", "")
-    if status:
-        st.caption(status)
-
-    with st.expander("Cloud Playlist 관리", expanded=False):
-        st.caption("JS 플레이어 안의 Cloud Playlist 저장 버튼으로 현재 재생목록을 Supabase에 저장합니다. 저장된 목록은 여기서 불러오거나 삭제할 수 있습니다.")
-        playlists = list_playlists()
-        if not playlists:
-            st.info("아직 저장된 플레이리스트가 없습니다. 왼쪽 플레이어의 Cloud Playlist 영역에서 이름을 입력하고 저장을 눌러보세요.")
-            return
-
-        options = {f"{p.get('name', 'My Playlist')} · {p.get('updated_at', '')}": p for p in playlists}
-        selected_label = st.selectbox("저장된 플레이리스트", list(options.keys()), key="cloud_playlist_select")
-        selected = options.get(selected_label) or {}
-        selected_id = selected.get("id")
-
-        col_load, col_delete = st.columns(2)
-        with col_load:
-            if st.button("플레이어에 불러오기", use_container_width=True):
-                song_ids = get_playlist_items(selected_id)
-                state = build_browser_playlist_state(song_ids, song_lookup)
-                if not state.get("playlist"):
-                    st.warning("현재 payload에서 재생 가능한 곡을 찾지 못했습니다. 4일 지난 곡은 archive lookup 연결 후 복원됩니다.")
-                else:
-                    st.session_state["pending_playlist_load_state"] = state
-                    st.session_state["pending_playlist_load_request_id"] = f"load-{selected_id}-{pd.Timestamp.utcnow().value}"
-                    st.session_state["playlist_cloud_status"] = f"'{selected.get('name', 'Playlist')}' 불러오기 요청됨 · {len(state['playlist'])}곡"
-                    st.rerun()
-        with col_delete:
-            if st.button("삭제", use_container_width=True):
-                if delete_playlist(selected_id):
-                    st.session_state["playlist_cloud_status"] = f"'{selected.get('name', 'Playlist')}' 삭제 완료"
-                    st.rerun()
-                else:
-                    st.error("삭제 실패: Supabase 연결 또는 권한을 확인하세요.")
+# Cloud Playlist is now handled directly inside the JS player via Supabase RPC.
+# Keeping the Streamlit side out of save/load/delete prevents full-app reruns
+# while audio is playing.
 
 def render_auth_status_bar():
     """Render Google login + Supabase status without breaking the public chart."""
@@ -529,7 +388,7 @@ def ranking_config_json():
     return json.dumps(ranking_config, ensure_ascii=False)
 
 
-def render_player_ranking_payload(songs, histories=None, title="Top 200 Trending", subtitle=None):
+def render_player_ranking_payload(songs, histories=None, title="Top 200 Trending", subtitle=None, cloud_config=None):
     songs = normalize_payload_songs(songs)
     histories = histories or {}
 
@@ -542,10 +401,11 @@ def render_player_ranking_payload(songs, histories=None, title="Top 200 Trending
         ranking_config_json(),
         title=title,
         subtitle=subtitle,
+        cloud_config_json=json.dumps(cloud_config or {}, ensure_ascii=False).replace("</", "<\\/"),
     )
 
 
-def render_player_ranking_payload_tabs(tabs_payload, tabs_order=None, default_key="top200"):
+def render_player_ranking_payload_tabs(tabs_payload, tabs_order=None, default_key="top200", cloud_config=None):
     tabs_payload = tabs_payload or {}
     tabs_order = tabs_order or list(tabs_payload.keys())
 
@@ -590,6 +450,7 @@ def render_player_ranking_payload_tabs(tabs_payload, tabs_order=None, default_ke
         tabs_json=tabs_json,
         tabs_order_json=tabs_order_json,
         default_tab_key=default_key,
+        cloud_config_json=json.dumps(cloud_config or {}, ensure_ascii=False).replace("</", "<\\/"),
     )
 
 
@@ -1016,6 +877,32 @@ def render_manual_song_form():
                     st.error(msg)
 
 
+
+
+def build_cloud_playlist_config():
+    """Browser-safe config for JS-only cloud playlist controls.
+
+    The JS player uses SUPABASE_ANON_KEY + SECURITY DEFINER RPC functions from
+    supabase/playlist_rpc.sql. This avoids Streamlit reruns while audio is playing.
+    """
+    if not is_logged_in() or not is_supabase_configured():
+        return {"enabled": False, "message": "로그인 후 Cloud Playlist를 사용할 수 있습니다."}
+
+    public_cfg = get_supabase_public_config()
+    token = ensure_playlist_cloud_token()
+    if not public_cfg.get("supabase_url") or not public_cfg.get("supabase_anon_key"):
+        return {"enabled": False, "message": "SUPABASE_ANON_KEY를 Streamlit Secrets에 추가해야 합니다."}
+    if not token:
+        err = st.session_state.get("supabase_last_error", "")
+        return {"enabled": False, "message": "Supabase playlist_rpc.sql 적용이 필요합니다." + (f" ({err[:120]})" if err else "")}
+
+    return {
+        "enabled": True,
+        "supabaseUrl": public_cfg["supabase_url"].rstrip("/"),
+        "anonKey": public_cfg["supabase_anon_key"],
+        "playlistToken": token,
+    }
+
 # ================================
 # Main
 # ================================
@@ -1045,8 +932,7 @@ if payload:
     if not tabs_order:
         st.info("표시할 탭 payload가 없습니다.")
     else:
-        song_lookup = collect_payload_song_lookup(tabs_payload)
-        render_cloud_playlist_panel(song_lookup)
+        cloud_config = build_cloud_playlist_config()
 
         # 플레이어와 차트를 하나의 HTML 컴포넌트 안에서 관리한다.
         # Streamlit radio/st.tabs로 차트를 바꾸면 전체 컴포넌트가 재마운트되어 <audio>가 끊기므로,
@@ -1055,6 +941,7 @@ if payload:
             tabs_payload,
             tabs_order=tabs_order,
             default_key="top200" if "top200" in tabs_order else tabs_order[0],
+            cloud_config=cloud_config,
         )
 
     render_manual_song_form()
@@ -1145,8 +1032,7 @@ fallback_tabs = {
     },
 }
 
-fallback_song_lookup = collect_payload_song_lookup(fallback_tabs)
-render_cloud_playlist_panel(fallback_song_lookup)
+fallback_cloud_config = build_cloud_playlist_config()
 
 # fallback에서도 Streamlit radio 대신 HTML 내부 탭을 사용해서
 # 차트를 바꿀 때 플레이어가 재마운트되지 않도록 한다.
@@ -1154,6 +1040,7 @@ render_player_ranking_payload_tabs(
     fallback_tabs,
     tabs_order=["new_songs", "top200", "rain_crew"],
     default_key="top200",
+    cloud_config=fallback_cloud_config,
 )
 
 render_manual_song_form()

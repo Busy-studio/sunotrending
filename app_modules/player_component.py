@@ -22,6 +22,7 @@ def render_player_ranking_html(
     tabs_json="null",
     tabs_order_json="[]",
     default_tab_key="",
+    cloud_config_json="{}",
 ):
     title = clean_payload_text(title) or "Suno Songs"
     subtitle = clean_payload_text(subtitle) or "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다."
@@ -360,6 +361,39 @@ def render_player_ranking_html(
         line-height: 1.35;
         min-height: 15px;
     }
+
+    .cloud-playlist-manage {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 6px;
+        align-items: center;
+        margin-top: 8px;
+    }
+
+    .cloud-playlist-select {
+        min-width: 0;
+        border: 1px solid var(--line-dark);
+        border-radius: 999px;
+        padding: 8px 10px;
+        font-size: 12px;
+        background: #ffffff;
+        outline: none;
+    }
+
+    .cloud-playlist-mini-btn {
+        border: 1px solid var(--line-dark);
+        background: #ffffff;
+        color: var(--text);
+        border-radius: 999px;
+        padding: 8px 9px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 850;
+        white-space: nowrap;
+    }
+
+    .cloud-playlist-mini-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .cloud-playlist-mini-btn:disabled { color: var(--muted); background: #f3f4f6; cursor: not-allowed; }
 
     .playlist-head {
         display: flex;
@@ -936,6 +970,13 @@ def render_player_ranking_html(
                     <input class="cloud-playlist-input" id="cloudPlaylistName" placeholder="저장할 플레이리스트 이름">
                     <button class="cloud-playlist-save" id="cloudSavePlaylistBtn">저장</button>
                 </div>
+                <div class="cloud-playlist-manage">
+                    <select class="cloud-playlist-select" id="cloudPlaylistSelect">
+                        <option value="">저장된 플레이리스트</option>
+                    </select>
+                    <button class="cloud-playlist-mini-btn" id="cloudLoadPlaylistBtn">불러오기</button>
+                    <button class="cloud-playlist-mini-btn" id="cloudDeletePlaylistBtn">삭제</button>
+                </div>
                 <div class="cloud-playlist-status" id="cloudPlaylistStatus">로그인 후 현재 JS 플레이리스트를 Supabase에 저장할 수 있습니다.</div>
             </div>
 
@@ -1047,6 +1088,7 @@ def render_player_ranking_html(
     const tabsData = decodeB64Json("__TABS_JSON_B64__", null);
     const tabsOrder = decodeB64Json("__TABS_ORDER_JSON_B64__", []);
     const defaultTabKey = __DEFAULT_TAB_KEY__;
+    const cloudConfig = decodeB64Json("__CLOUD_CONFIG_JSON_B64__", {});
 
     const playlistStorageKey = "sunoTrending.playlist.v1";
     const cloudLoadRequestStorageKey = "sunoTrending.cloudLoad.request.v1";
@@ -1095,6 +1137,9 @@ def render_player_ranking_html(
     const loudnessStatus = document.getElementById("loudnessStatus");
     const cloudPlaylistName = document.getElementById("cloudPlaylistName");
     const cloudSavePlaylistBtn = document.getElementById("cloudSavePlaylistBtn");
+    const cloudPlaylistSelect = document.getElementById("cloudPlaylistSelect");
+    const cloudLoadPlaylistBtn = document.getElementById("cloudLoadPlaylistBtn");
+    const cloudDeletePlaylistBtn = document.getElementById("cloudDeletePlaylistBtn");
     const cloudPlaylistStatus = document.getElementById("cloudPlaylistStatus");
     const progress = document.getElementById("progress");
     const currentTimeEl = document.getElementById("currentTime");
@@ -1431,30 +1476,182 @@ function cycleSort(key) {
         }
     }
 
-    function requestCloudPlaylistSave() {
+    function cloudEnabled() {
+        return Boolean(cloudConfig && cloudConfig.enabled && cloudConfig.supabaseUrl && cloudConfig.anonKey && cloudConfig.playlistToken);
+    }
+
+    function setCloudControlsEnabled(enabled) {
+        [cloudSavePlaylistBtn, cloudLoadPlaylistBtn, cloudDeletePlaylistBtn, cloudPlaylistSelect].forEach(el => {
+            if (el) el.disabled = !enabled;
+        });
+    }
+
+    async function callCloudRpc(functionName, body) {
+        if (!cloudEnabled()) {
+            throw new Error((cloudConfig && cloudConfig.message) || "Cloud Playlist is not configured.");
+        }
+        const url = `${String(cloudConfig.supabaseUrl).replace(/[/]$/, "")}/rest/v1/rpc/${functionName}`;
+        const res = await fetch(url, {
+            method: "POST",
+            headers: {
+                "apikey": cloudConfig.anonKey,
+                "Authorization": `Bearer ${cloudConfig.anonKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body || {}),
+        });
+        const text = await res.text();
+        let data = null;
+        if (text) {
+            try { data = JSON.parse(text); } catch (e) { data = text; }
+        }
+        if (!res.ok) {
+            const msg = data && data.message ? data.message : String(text || res.statusText || "Supabase RPC failed");
+            throw new Error(msg);
+        }
+        return data;
+    }
+
+    function allKnownSongs() {
+        const map = new Map();
+        (Array.isArray(songs) ? songs : []).forEach(song => {
+            if (song && song.id) map.set(String(song.id), song);
+        });
+        if (tabsData && typeof tabsData === "object") {
+            Object.values(tabsData).forEach(tab => {
+                (Array.isArray(tab && tab.songs) ? tab.songs : []).forEach(song => {
+                    if (song && song.id && !map.has(String(song.id))) map.set(String(song.id), song);
+                });
+            });
+        }
+        return map;
+    }
+
+    async function refreshCloudPlaylistList(silent = false) {
+        if (!cloudPlaylistSelect) return;
+        if (!cloudEnabled()) {
+            cloudPlaylistSelect.innerHTML = `<option value="">Cloud Playlist 비활성</option>`;
+            updateCloudPlaylistStatus((cloudConfig && cloudConfig.message) || "로그인 후 Cloud Playlist를 사용할 수 있습니다.");
+            setCloudControlsEnabled(false);
+            return;
+        }
+        setCloudControlsEnabled(false);
+        if (!silent) updateCloudPlaylistStatus("저장된 플레이리스트 불러오는 중...");
+        try {
+            const rows = await callCloudRpc("cloud_list_playlists", { p_token: cloudConfig.playlistToken });
+            const items = Array.isArray(rows) ? rows : [];
+            cloudPlaylistSelect.innerHTML = `<option value="">저장된 플레이리스트</option>` + items.map(row => {
+                const count = Number(row.song_count || 0);
+                const label = `${row.name || "My Playlist"} · ${count}곡`;
+                return `<option value="${escapeHtml(row.id)}">${escapeHtml(label)}</option>`;
+            }).join("");
+            setCloudControlsEnabled(true);
+            if (!silent) updateCloudPlaylistStatus(items.length ? `저장된 플레이리스트 ${items.length}개` : "아직 저장된 플레이리스트가 없습니다.");
+        } catch (error) {
+            console.warn("Failed to refresh cloud playlists", error);
+            updateCloudPlaylistStatus(`Cloud Playlist 목록 실패: ${error.message || error}`);
+            setCloudControlsEnabled(true);
+        }
+    }
+
+    async function requestCloudPlaylistSave() {
         if (!playlist.length) {
             alert("저장할 플레이리스트가 비어 있습니다.");
+            return;
+        }
+        if (!cloudEnabled()) {
+            updateCloudPlaylistStatus((cloudConfig && cloudConfig.message) || "로그인 후 저장할 수 있습니다.");
             return;
         }
 
         const name = String(cloudPlaylistName && cloudPlaylistName.value ? cloudPlaylistName.value : "").trim()
             || `Suno Playlist ${new Date().toLocaleString()}`;
-        const state = currentPlaylistStatePayload();
-        const request = {
-            type: "save_playlist",
-            requestId: makeRequestId("playlist"),
-            requestedAt: Date.now(),
-            name,
-            playlist: state.playlist,
-            state,
-        };
+        const songIds = playlist.map(song => String(song && song.id || "").trim()).filter(Boolean);
 
         try {
-            window.localStorage.setItem("sunoTrending.cloudSaveRequest.v1", JSON.stringify(request));
-            updateCloudPlaylistStatus(`저장 요청 전송됨: ${name} (${playlist.length}곡)`);
+            setCloudControlsEnabled(false);
+            updateCloudPlaylistStatus(`저장 중: ${name} (${songIds.length}곡)`);
+            const result = await callCloudRpc("cloud_save_playlist", {
+                p_token: cloudConfig.playlistToken,
+                p_name: name,
+                p_song_ids: songIds,
+            });
+            const savedCount = result && result.song_count !== undefined ? Number(result.song_count) : songIds.length;
+            updateCloudPlaylistStatus(`'${name}' 저장 완료 · ${savedCount}곡`);
+            if (cloudPlaylistName) cloudPlaylistName.value = "";
+            await refreshCloudPlaylistList(true);
         } catch (error) {
-            console.warn("Failed to request cloud playlist save", error);
-            updateCloudPlaylistStatus("브라우저 저장소 접근 실패로 저장 요청을 만들지 못했습니다.");
+            console.warn("Failed to save cloud playlist", error);
+            updateCloudPlaylistStatus(`저장 실패: ${error.message || error}`);
+        } finally {
+            setCloudControlsEnabled(true);
+        }
+    }
+
+    async function loadSelectedCloudPlaylist() {
+        const playlistId = cloudPlaylistSelect ? cloudPlaylistSelect.value : "";
+        if (!playlistId) {
+            updateCloudPlaylistStatus("불러올 플레이리스트를 선택하세요.");
+            return;
+        }
+        try {
+            setCloudControlsEnabled(false);
+            updateCloudPlaylistStatus("플레이리스트 불러오는 중...");
+            const rows = await callCloudRpc("cloud_get_playlist_song_ids", {
+                p_token: cloudConfig.playlistToken,
+                p_playlist_id: playlistId,
+            });
+            const songIds = (Array.isArray(rows) ? rows : []).map(row => String(row.song_id || "")).filter(Boolean);
+            const songMap = allKnownSongs();
+            const loaded = songIds.map(id => songMap.get(String(id))).filter(song => song && song.audio_url);
+            if (!loaded.length) {
+                updateCloudPlaylistStatus("현재 payload에서 재생 가능한 곡을 찾지 못했습니다. archive lookup 연결 후 복원 가능합니다.");
+                return;
+            }
+            const state = {
+                playlist: loaded,
+                currentSongId: String(loaded[0].id),
+                currentTime: 0,
+                duration: 0,
+                isPlaying: false,
+                audioSrc: loaded[0].audio_url || null,
+                repeatOne: false,
+                repeatAll: true,
+                playbackMode: "sequence",
+                volume: Number(volume.value || 80),
+                loudnessNormalize,
+                savedAt: Date.now(),
+            };
+            applyPlaylistState(state, { allowAutoplay: false, persist: true });
+            updateCloudPlaylistStatus(`불러오기 완료 · ${loaded.length}곡`);
+        } catch (error) {
+            console.warn("Failed to load cloud playlist", error);
+            updateCloudPlaylistStatus(`불러오기 실패: ${error.message || error}`);
+        } finally {
+            setCloudControlsEnabled(true);
+        }
+    }
+
+    async function deleteSelectedCloudPlaylist() {
+        const playlistId = cloudPlaylistSelect ? cloudPlaylistSelect.value : "";
+        if (!playlistId) {
+            updateCloudPlaylistStatus("삭제할 플레이리스트를 선택하세요.");
+            return;
+        }
+        if (!confirm("선택한 Cloud Playlist를 삭제할까요?")) return;
+        try {
+            setCloudControlsEnabled(false);
+            await callCloudRpc("cloud_delete_playlist", {
+                p_token: cloudConfig.playlistToken,
+                p_playlist_id: playlistId,
+            });
+            updateCloudPlaylistStatus("삭제 완료");
+            await refreshCloudPlaylistList(true);
+        } catch (error) {
+            console.warn("Failed to delete cloud playlist", error);
+            updateCloudPlaylistStatus(`삭제 실패: ${error.message || error}`);
+        } finally {
+            setCloudControlsEnabled(true);
         }
     }
 
@@ -2218,6 +2415,12 @@ function cycleSort(key) {
     if (cloudSavePlaylistBtn) {
         cloudSavePlaylistBtn.addEventListener("click", requestCloudPlaylistSave);
     }
+    if (cloudLoadPlaylistBtn) {
+        cloudLoadPlaylistBtn.addEventListener("click", loadSelectedCloudPlaylist);
+    }
+    if (cloudDeletePlaylistBtn) {
+        cloudDeletePlaylistBtn.addEventListener("click", deleteSelectedCloudPlaylist);
+    }
 
     playBtn.addEventListener("click", togglePlay);
     nextBtn.addEventListener("click", playNext);
@@ -2508,13 +2711,6 @@ function cycleSort(key) {
         return false;
     }
 
-    window.addEventListener("storage", event => {
-        if (event.key === cloudLoadRequestStorageKey) {
-            applyCloudPlaylistLoadRequest(true);
-        }
-    });
-    setInterval(() => applyCloudPlaylistLoadRequest(false), 800);
-
     window.addEventListener("pagehide", () => savePlaylistState(true));
     window.addEventListener("beforeunload", () => savePlaylistState(true));
 
@@ -2524,7 +2720,7 @@ function cycleSort(key) {
         renderTable("");
     }
     restorePlaylistState();
-    applyCloudPlaylistLoadRequest(false);
+    refreshCloudPlaylistList(true);
     renderPlaylist();
     refreshModeButtons();
     updateVolume();
@@ -2546,6 +2742,7 @@ function cycleSort(key) {
         .replace("__TABS_JSON_B64__", _b64_json_payload(tabs_json or "null"))
         .replace("__TABS_ORDER_JSON_B64__", _b64_json_payload(tabs_order_json or "[]"))
         .replace("__DEFAULT_TAB_KEY__", default_tab_key_js)
+        .replace("__CLOUD_CONFIG_JSON_B64__", _b64_json_payload(cloud_config_json or "{}"))
     )
 
     components.html(
