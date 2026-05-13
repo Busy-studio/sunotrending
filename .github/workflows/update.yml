@@ -6,10 +6,12 @@ name: Update Suno Song Stats
       mode:
         description: "Update mode"
         required: true
-        default: "full"
+        default: "full_parallel"
         type: choice
         options:
-          - full
+          - full_parallel
+          - existing_parallel
+          - new_only
           - manual_add
       song_url:
         description: "Suno song URL for manual_add mode"
@@ -17,7 +19,10 @@ name: Update Suno Song Stats
         type: string
 
   schedule:
-    - cron: "*/15 * * * *"
+    # 신규곡 수집 포함: 30분마다 1회
+    - cron: "0,30 * * * *"
+    # 기존곡 수치 갱신만: 30분 사이에 1회씩 추가 실행
+    - cron: "15,45 * * * *"
 
 concurrency:
   group: suno-data-update
@@ -26,23 +31,70 @@ concurrency:
 permissions:
   contents: write
 
-jobs:
-  update:
-    runs-on: ubuntu-latest
+env:
+  PYTHON_VERSION: "3.12"
+  SHARD_COUNT: "4"
+  SHARD_UPDATE_ROWS_TOTAL: "1200"
+  REQUEST_SLEEP_SECONDS: "0.8"
+  SONG_RETENTION_DAYS: "4"
+  GROWTH_WINDOW_HOURS: "3"
+  PLAY_WEIGHT: "1.0"
+  LIKE_WEIGHT: "3.0"
+  COMMENT_WEIGHT: "4.0"
+  GROWTH_WEIGHT: "1.5"
+  FRESHNESS_WEIGHT: "35.0"
+  FRESHNESS_POWER: "1.35"
 
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      run_new_songs: ${{ steps.mode.outputs.run_new_songs }}
+      run_existing_shards: ${{ steps.mode.outputs.run_existing_shards }}
+      run_manual_add: ${{ steps.mode.outputs.run_manual_add }}
     steps:
       - name: Decide update mode
         id: mode
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
+            MODE="${{ github.event.inputs.mode }}"
+          elif [ "${{ github.event.schedule }}" = "0,30 * * * *" ]; then
+            MODE="full_parallel"
           else
-            echo "mode=full" >> "$GITHUB_OUTPUT"
+            MODE="existing_parallel"
           fi
 
-          echo "Selected mode:"
-          cat "$GITHUB_OUTPUT"
+          RUN_NEW="false"
+          RUN_EXISTING="false"
+          RUN_MANUAL="false"
 
+          if [ "$MODE" = "full_parallel" ]; then
+            RUN_NEW="true"
+            RUN_EXISTING="true"
+          elif [ "$MODE" = "existing_parallel" ]; then
+            RUN_EXISTING="true"
+          elif [ "$MODE" = "new_only" ]; then
+            RUN_NEW="true"
+          elif [ "$MODE" = "manual_add" ]; then
+            RUN_MANUAL="true"
+          else
+            echo "Unknown mode: $MODE"
+            exit 1
+          fi
+
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "run_new_songs=$RUN_NEW" >> "$GITHUB_OUTPUT"
+          echo "run_existing_shards=$RUN_EXISTING" >> "$GITHUB_OUTPUT"
+          echo "run_manual_add=$RUN_MANUAL" >> "$GITHUB_OUTPUT"
+
+          echo "Selected mode=$MODE new=$RUN_NEW existing=$RUN_EXISTING manual=$RUN_MANUAL"
+
+  prepare-data:
+    needs: decide
+    if: needs.decide.outputs.run_manual_add != 'true'
+    runs-on: ubuntu-latest
+    steps:
       - name: Checkout repo
         uses: actions/checkout@v5
 
@@ -54,7 +106,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
         run: |
@@ -65,12 +117,10 @@ jobs:
       - name: Load latest data from data branch
         run: |
           mkdir -p data
-
           git fetch origin data || true
 
           if git show-ref --verify --quiet refs/remotes/origin/data; then
             echo "[data branch] Found origin/data. Loading latest data files."
-
             for file in \
               suno_song_db.zip \
               suno_song_history.zip \
@@ -89,8 +139,6 @@ jobs:
           else
             echo "[data branch] origin/data not found. Using files from main branch."
           fi
-
-          echo "[data branch] Current data files:"
           ls -lh data || true
 
       - name: Decrypt existing data
@@ -99,53 +147,129 @@ jobs:
         run: |
           python scripts/decrypt_data.py
 
-      - name: Debug CSV before update
-        run: |
-          echo "Before update:"
-          ls -lh data || true
-
-          python - <<'PY'
-          import os
-          import pandas as pd
-
-          for path in [
-              "data/suno_song_db.csv",
-              "data/suno_song_history.csv",
-              "data/suno_song_archive.csv",
-              "data/suno_rank_history.csv",
-              "data/manual_song_queue.csv",
-          ]:
-              print(f"[before] {path} exists={os.path.exists(path)}")
-              if os.path.exists(path):
-                  df = pd.read_csv(path)
-                  print(f"[before] {path} rows={len(df)}")
-          PY
-
-      - name: Full update public song pages
-        if: steps.mode.outputs.mode == 'full'
+      - name: Discover new songs
+        if: needs.decide.outputs.run_new_songs == 'true'
         env:
-          REQUEST_SLEEP_SECONDS: "0.8"
-          MAX_UPDATE_ROWS: "300"
           NEW_SONGS_PAGES: "3"
           NEW_SONGS_PAGE_SIZE: "50"
-          SONG_RETENTION_DAYS: "4"
+          REQUEST_SLEEP_SECONDS: ${{ env.REQUEST_SLEEP_SECONDS }}
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
         run: |
-          python scripts/update_public_song_pages.py
+          python scripts/update_new_songs_only.py
 
-      - name: Manual add Suno song
-        if: steps.mode.outputs.mode == 'manual_add'
-        env:
-          MANUAL_SUNO_URL: ${{ github.event.inputs.song_url }}
-          SONG_RETENTION_DAYS: "4"
-          REQUEST_SLEEP_SECONDS: "0.8"
+      - name: Upload prepared decrypted data
+        uses: actions/upload-artifact@v4
+        with:
+          name: prepared-data
+          path: |
+            data/*.csv
+            data/*.json
+          retention-days: 1
+
+  fetch-existing-shards:
+    needs: [decide, prepare-data]
+    if: needs.decide.outputs.run_existing_shards == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Sync latest main
         run: |
-          python scripts/manual_add_song.py
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install -r requirements.txt
+
+      - name: Download prepared data
+        uses: actions/download-artifact@v4
+        with:
+          name: prepared-data
+          path: data
+
+      - name: Fetch existing song shard
+        env:
+          REQUEST_SLEEP_SECONDS: ${{ env.REQUEST_SLEEP_SECONDS }}
+          MAX_UPDATE_ROWS: ${{ env.SHARD_UPDATE_ROWS_TOTAL }}
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+        run: |
+          python scripts/update_existing_song_shard.py \
+            --shard-index ${{ matrix.shard }} \
+            --shard-count ${{ env.SHARD_COUNT }} \
+            --output-dir data/partial_updates
+
+      - name: Upload shard result
+        uses: actions/upload-artifact@v4
+        with:
+          name: partial-update-${{ matrix.shard }}
+          path: data/partial_updates/*.csv
+          retention-days: 1
+
+  merge-and-publish:
+    needs: [decide, prepare-data, fetch-existing-shards]
+    if: always() && needs.decide.outputs.run_manual_add != 'true' && needs['prepare-data'].result == 'success' && (needs.decide.outputs.run_existing_shards != 'true' || needs['fetch-existing-shards'].result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Sync latest main
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install -r requirements.txt
+
+      - name: Download prepared data
+        uses: actions/download-artifact@v4
+        with:
+          name: prepared-data
+          path: data
+
+      - name: Download shard results
+        if: needs.decide.outputs.run_existing_shards == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: partial-update-*
+          path: data/partial_updates
+          merge-multiple: true
+
+      - name: Merge shard updates
+        if: needs.decide.outputs.run_existing_shards == 'true'
+        env:
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+        run: |
+          python scripts/merge_shard_updates.py
 
       - name: Process manual song queue
+        if: needs.decide.outputs.run_new_songs == 'true'
         env:
           MANUAL_QUEUE_MAX_ITEMS: "20"
-          SONG_RETENTION_DAYS: "4"
-          REQUEST_SLEEP_SECONDS: "0.8"
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+          REQUEST_SLEEP_SECONDS: ${{ env.REQUEST_SLEEP_SECONDS }}
         run: |
           if [ -f scripts/process_manual_queue.py ]; then
             python scripts/process_manual_queue.py
@@ -153,42 +277,33 @@ jobs:
             echo "[manual_queue] scripts/process_manual_queue.py not found. Skipping."
           fi
 
-      - name: Validate CSV after update
+      - name: Validate CSV before scoring
         run: |
-          echo "After update script:"
           ls -lh data || true
-
           python - <<'PY'
           import os
           import sys
           import pandas as pd
-
           db_path = "data/suno_song_db.csv"
-          hist_path = "data/suno_song_history.csv"
-          archive_path = "data/suno_song_archive.csv"
-          rank_history_path = "data/suno_rank_history.csv"
-          queue_path = "data/manual_song_queue.csv"
-
           if not os.path.exists(db_path):
               print(f"[ERROR] Missing {db_path}")
               sys.exit(1)
-
           db = pd.read_csv(db_path)
-          print(f"[after] {db_path} rows={len(db)}")
-
-          for path in [hist_path, archive_path, rank_history_path, queue_path]:
+          print(f"[validate] {db_path} rows={len(db)}")
+          if len(db) <= 206:
+              print("[ERROR] DB CSV still has <= 206 rows; refusing to publish.")
+              sys.exit(1)
+          for path in [
+              "data/suno_song_history.csv",
+              "data/suno_song_archive.csv",
+              "data/suno_rank_history.csv",
+              "data/manual_song_queue.csv",
+          ]:
               if os.path.exists(path):
                   df = pd.read_csv(path)
-                  print(f"[after] {path} rows={len(df)}")
+                  print(f"[validate] {path} rows={len(df)}")
               else:
-                  print(f"[after] {path} missing")
-
-          mode = "${{ steps.mode.outputs.mode }}"
-
-          if mode == "full" and len(db) <= 206:
-              print("[ERROR] Full update finished but DB CSV still has <= 206 rows.")
-              print("[ERROR] update_public_song_pages.py probably did not save the expanded DB.")
-              sys.exit(1)
+                  print(f"[validate] {path} missing")
           PY
 
       - name: Analyze comment quality
@@ -196,29 +311,29 @@ jobs:
           COMMENT_ANALYZE_TOP_N: "100"
           COMMENT_MAX_PAGES: "2"
           COMMENT_MAX_ITEMS_PER_SONG: "80"
-          COMMENT_REQUEST_SLEEP_SECONDS: "0.8"
-          SONG_RETENTION_DAYS: "4"
-          GROWTH_WINDOW_HOURS: "3"
-          PLAY_WEIGHT: "1.0"
-          LIKE_WEIGHT: "3.0"
-          COMMENT_WEIGHT: "4.0"
-          GROWTH_WEIGHT: "1.5"
-          FRESHNESS_WEIGHT: "35.0"
-          FRESHNESS_POWER: "1.35"
+          COMMENT_REQUEST_SLEEP_SECONDS: ${{ env.REQUEST_SLEEP_SECONDS }}
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+          GROWTH_WINDOW_HOURS: ${{ env.GROWTH_WINDOW_HOURS }}
+          PLAY_WEIGHT: ${{ env.PLAY_WEIGHT }}
+          LIKE_WEIGHT: ${{ env.LIKE_WEIGHT }}
+          COMMENT_WEIGHT: ${{ env.COMMENT_WEIGHT }}
+          GROWTH_WEIGHT: ${{ env.GROWTH_WEIGHT }}
+          FRESHNESS_WEIGHT: ${{ env.FRESHNESS_WEIGHT }}
+          FRESHNESS_POWER: ${{ env.FRESHNESS_POWER }}
         run: |
           python scripts/analyze_comment_quality.py
 
       - name: Update rank movement
         env:
           RANK_MOVEMENT_TOP_N: "200"
-          SONG_RETENTION_DAYS: "4"
-          GROWTH_WINDOW_HOURS: "3"
-          PLAY_WEIGHT: "1.0"
-          LIKE_WEIGHT: "3.0"
-          COMMENT_WEIGHT: "4.0"
-          GROWTH_WEIGHT: "1.5"
-          FRESHNESS_WEIGHT: "35.0"
-          FRESHNESS_POWER: "1.35"
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+          GROWTH_WINDOW_HOURS: ${{ env.GROWTH_WINDOW_HOURS }}
+          PLAY_WEIGHT: ${{ env.PLAY_WEIGHT }}
+          LIKE_WEIGHT: ${{ env.LIKE_WEIGHT }}
+          COMMENT_WEIGHT: ${{ env.COMMENT_WEIGHT }}
+          GROWTH_WEIGHT: ${{ env.GROWTH_WEIGHT }}
+          FRESHNESS_WEIGHT: ${{ env.FRESHNESS_WEIGHT }}
+          FRESHNESS_POWER: ${{ env.FRESHNESS_POWER }}
         run: |
           python scripts/update_rank_movement.py
 
@@ -236,113 +351,40 @@ jobs:
 
       - name: Build app payload
         env:
-          SONG_RETENTION_DAYS: "4"
-          GROWTH_WINDOW_HOURS: "3"
-          PLAY_WEIGHT: "1.0"
-          LIKE_WEIGHT: "3.0"
-          COMMENT_WEIGHT: "4.0"
-          GROWTH_WEIGHT: "1.5"
-          FRESHNESS_WEIGHT: "35.0"
-          FRESHNESS_POWER: "1.35"
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+          GROWTH_WINDOW_HOURS: ${{ env.GROWTH_WINDOW_HOURS }}
+          PLAY_WEIGHT: ${{ env.PLAY_WEIGHT }}
+          LIKE_WEIGHT: ${{ env.LIKE_WEIGHT }}
+          COMMENT_WEIGHT: ${{ env.COMMENT_WEIGHT }}
+          GROWTH_WEIGHT: ${{ env.GROWTH_WEIGHT }}
+          FRESHNESS_WEIGHT: ${{ env.FRESHNESS_WEIGHT }}
+          FRESHNESS_POWER: ${{ env.FRESHNESS_POWER }}
           PAYLOAD_NEW_SONGS_LIMIT: "300"
           PAYLOAD_TOP200_LIMIT: "200"
           PAYLOAD_RAIN_CREW_LIMIT: "300"
           PAYLOAD_HISTORY_POINTS: "80"
         run: |
           python scripts/build_app_payload.py
+          test -f data/suno_app_payload.json
 
-          echo "After build app payload:"
-          ls -lh data || true
-
-          if [ ! -f data/suno_app_payload.json ]; then
-            echo "[ERROR] data/suno_app_payload.json was not created"
-            exit 1
-          fi
-
-      - name: Validate CSV after payload build
+      - name: Validate payload
         run: |
-          echo "After payload build:"
-          ls -lh data || true
-
           python - <<'PY'
           import json
           import os
           import sys
           import pandas as pd
-
-          db_path = "data/suno_song_db.csv"
-          quality_path = "data/suno_comment_quality.csv"
-          queue_path = "data/manual_song_queue.csv"
           payload_path = "data/suno_app_payload.json"
-
-          if not os.path.exists(db_path):
-              print(f"[ERROR] Missing {db_path}")
-              sys.exit(1)
-
-          db = pd.read_csv(db_path)
-          print(f"[quality after] db_rows={len(db)}")
-
-          for col in [
-              "adjusted_comment_count",
-              "comment_quality_ratio",
-              "previous_rank",
-              "current_rank",
-              "rank_change",
-              "rank_status",
-              "current_score",
-              "base_score",
-              "growth_score",
-              "freshness_score",
-              "best_rank",
-              "best_trend_score",
-              "integrated_lufs",
-              "true_peak_db",
-              "loudness_gain_db",
-              "loudness_status",
-          ]:
-              print(f"[quality after] has_{col}={col in db.columns}")
-
-          for col in [
-              "created_at",
-              "lyrics",
-              "prompt",
-              "gpt_description_prompt",
-              "display_tags",
-              "audio_url",
-              "image_url",
-          ]:
-              if col in db.columns:
-                  s = db[col].astype(str).str.strip()
-                  valid = (~s.str.lower().isin(["", "nan", "none", "null", "<na>", "-"])).sum()
-                  print(f"[detail after] {col}_valid={valid}/{len(db)}")
-              else:
-                  print(f"[detail after] missing_{col}=True")
-
-          if os.path.exists(quality_path):
-              q = pd.read_csv(quality_path)
-              print(f"[quality after] quality_rows={len(q)}")
-          else:
-              print(f"[quality after] {quality_path} missing")
-
-          if os.path.exists(queue_path):
-              queue = pd.read_csv(queue_path)
-              print(f"[quality after] queue_rows={len(queue)}")
-          else:
-              print(f"[quality after] {queue_path} missing")
-
+          db_path = "data/suno_song_db.csv"
           if not os.path.exists(payload_path):
               print(f"[ERROR] Missing {payload_path}")
               sys.exit(1)
-
           with open(payload_path, "r", encoding="utf-8") as f:
               payload = json.load(f)
-
-          tabs = payload.get("tabs", {})
-          print(f"[payload] tabs={list(tabs.keys())}")
-
-          for key, tab in tabs.items():
-              songs = tab.get("songs", [])
-              print(f"[payload] {key}_songs={len(songs)}")
+          print("[payload] tabs=", list((payload.get("tabs") or {}).keys()))
+          print("[payload] meta=", payload.get("meta", {}))
+          if os.path.exists(db_path):
+              print("[payload] db_rows=", len(pd.read_csv(db_path)))
           PY
 
       - name: Encrypt data
@@ -351,123 +393,137 @@ jobs:
         run: |
           python scripts/encrypt_data.py
 
-      - name: Validate encrypted output changed
+      - name: Publish data branch
         run: |
-          echo "After encrypt:"
-          ls -lh \
-            data/suno_song_db.zip \
-            data/suno_song_history.zip \
-            data/suno_song_archive.zip \
-            data/suno_rank_history.zip \
-            data/suno_app_payload.zip \
-            || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if [ ! -f data/suno_app_payload.zip ]; then
-            echo "[ERROR] data/suno_app_payload.zip was not created"
-            echo "[ERROR] Check scripts/encrypt_data.py. It must encrypt data/suno_app_payload.json."
-            exit 1
+          rm -rf /tmp/suno-data-branch
+          git clone --depth 1 --branch data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" /tmp/suno-data-branch || true
+
+          if [ ! -d /tmp/suno-data-branch/.git ]; then
+            git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" /tmp/suno-data-branch
+            cd /tmp/suno-data-branch
+            git checkout --orphan data
+            git rm -rf . || true
+          else
+            cd /tmp/suno-data-branch
           fi
 
-          git status --short
+          mkdir -p data
+          cp "$GITHUB_WORKSPACE"/data/*.zip data/ 2>/dev/null || true
+          cp "$GITHUB_WORKSPACE"/data/manual_song_queue.csv data/ 2>/dev/null || true
 
-      - name: Remove plain CSV and JSON files
+          git add data
+          git commit -m "Update Suno data" || echo "No data changes to commit"
+          git push origin data
+
+  manual-add:
+    needs: decide
+    if: needs.decide.outputs.run_manual_add == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Sync latest main
         run: |
-          rm -f data/suno_song_db.csv
-          rm -f data/suno_song_history.csv
-          rm -f data/suno_song_archive.csv
-          rm -f data/suno_rank_history.csv
-          rm -f data/suno_comment_quality.csv
-          rm -f data/suno_app_payload.json
+          git fetch origin main
+          git reset --hard origin/main
 
-      - name: Commit encrypted data to data branch
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install -r requirements.txt
 
-          DATA_BRANCH_DIR="/tmp/suno-data-branch"
-
-          rm -rf "$DATA_BRANCH_DIR"
-
-          for attempt in 1 2 3; do
-            echo "Fetch attempt $attempt/3..."
-            if git fetch origin data; then
-              break
-            fi
-
-            if [ $attempt -eq 3 ]; then
-              echo "Fetch failed after 3 attempts. Will try to create data branch if needed."
-              break
-            fi
-
-            sleep $((2 ** attempt))
-          done
-
+      - name: Load latest data from data branch
+        run: |
+          mkdir -p data
+          git fetch origin data || true
           if git show-ref --verify --quiet refs/remotes/origin/data; then
-            echo "Using existing origin/data branch"
-            git worktree add -B data "$DATA_BRANCH_DIR" origin/data
-          else
-            echo "Creating new data branch"
-            git worktree add -B data "$DATA_BRANCH_DIR"
-            cd "$DATA_BRANCH_DIR"
-            git rm -r . || true
-            cd -
-          fi
-
-          mkdir -p "$DATA_BRANCH_DIR/data"
-
-          for file in \
-            suno_song_db.zip \
-            suno_song_history.zip \
-            suno_song_archive.zip \
-            suno_rank_history.zip \
-            suno_app_payload.zip \
-            manual_song_queue.csv
-          do
-            if [ -f data/$file ]; then
-              cp data/$file "$DATA_BRANCH_DIR/data/$file"
-              echo "[copy] data/$file"
-            else
-              echo "[copy] data/$file not found. Skipping."
-            fi
-          done
-
-          cd "$DATA_BRANCH_DIR"
-
-          for file in \
-            suno_song_db.zip \
-            suno_song_history.zip \
-            suno_song_archive.zip \
-            suno_rank_history.zip \
-            suno_app_payload.zip \
-            manual_song_queue.csv
-          do
-            if [ -f data/$file ]; then
-              git add data/$file
-              echo "[git add] data/$file"
-            fi
-          done
-
-          if git diff --cached --quiet; then
-            echo "No data changes to commit on data branch"
-          else
-            if [ "${{ steps.mode.outputs.mode }}" = "manual_add" ]; then
-              git commit -m "Manual add Suno song"
-            else
-              git commit -m "Update encrypted Suno data"
-            fi
-
-            for attempt in 1 2 3; do
-              echo "Push attempt $attempt/3..."
-              if git push origin HEAD:data; then
-                echo "Pushed data to data branch successfully."
-                break
-              elif [ $attempt -lt 3 ]; then
-                sleep $((2 ** attempt))
-                git fetch origin data || true
-                git rebase origin/data || true
-              else
-                echo "Failed to push after 3 attempts"
-                exit 1
+            for file in \
+              suno_song_db.zip \
+              suno_song_history.zip \
+              suno_song_archive.zip \
+              suno_rank_history.zip \
+              suno_app_payload.zip \
+              manual_song_queue.csv
+            do
+              if git cat-file -e origin/data:data/$file 2>/dev/null; then
+                git show origin/data:data/$file > data/$file
               fi
             done
           fi
+
+      - name: Decrypt existing data
+        env:
+          DATA_ZIP_PASSWORD: ${{ secrets.DATA_ZIP_PASSWORD }}
+        run: |
+          python scripts/decrypt_data.py
+
+      - name: Manual add Suno song
+        env:
+          MANUAL_SUNO_URL: ${{ github.event.inputs.song_url }}
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+          REQUEST_SLEEP_SECONDS: ${{ env.REQUEST_SLEEP_SECONDS }}
+        run: |
+          python scripts/manual_add_song.py
+
+      - name: Process manual queue
+        env:
+          MANUAL_QUEUE_MAX_ITEMS: "20"
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+          REQUEST_SLEEP_SECONDS: ${{ env.REQUEST_SLEEP_SECONDS }}
+        run: |
+          python scripts/process_manual_queue.py
+
+      - name: Build app payload
+        env:
+          SONG_RETENTION_DAYS: ${{ env.SONG_RETENTION_DAYS }}
+          GROWTH_WINDOW_HOURS: ${{ env.GROWTH_WINDOW_HOURS }}
+          PLAY_WEIGHT: ${{ env.PLAY_WEIGHT }}
+          LIKE_WEIGHT: ${{ env.LIKE_WEIGHT }}
+          COMMENT_WEIGHT: ${{ env.COMMENT_WEIGHT }}
+          GROWTH_WEIGHT: ${{ env.GROWTH_WEIGHT }}
+          FRESHNESS_WEIGHT: ${{ env.FRESHNESS_WEIGHT }}
+          FRESHNESS_POWER: ${{ env.FRESHNESS_POWER }}
+          PAYLOAD_NEW_SONGS_LIMIT: "300"
+          PAYLOAD_TOP200_LIMIT: "200"
+          PAYLOAD_RAIN_CREW_LIMIT: "300"
+          PAYLOAD_HISTORY_POINTS: "80"
+        run: |
+          python scripts/update_rank_movement.py
+          python scripts/build_app_payload.py
+
+      - name: Encrypt data
+        env:
+          DATA_ZIP_PASSWORD: ${{ secrets.DATA_ZIP_PASSWORD }}
+        run: |
+          python scripts/encrypt_data.py
+
+      - name: Publish data branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -rf /tmp/suno-data-branch
+          git clone --depth 1 --branch data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" /tmp/suno-data-branch || true
+          if [ ! -d /tmp/suno-data-branch/.git ]; then
+            git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" /tmp/suno-data-branch
+            cd /tmp/suno-data-branch
+            git checkout --orphan data
+            git rm -rf . || true
+          else
+            cd /tmp/suno-data-branch
+          fi
+          mkdir -p data
+          cp "$GITHUB_WORKSPACE"/data/*.zip data/ 2>/dev/null || true
+          cp "$GITHUB_WORKSPACE"/data/manual_song_queue.csv data/ 2>/dev/null || true
+          git add data
+          git commit -m "Manual add Suno song" || echo "No data changes to commit"
+          git push origin data
