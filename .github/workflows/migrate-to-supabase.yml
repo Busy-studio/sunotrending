@@ -26,9 +26,9 @@ jobs:
     timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      DATA_ZIP_PASSWORD: ${{ secrets.DATA_ZIP_PASSWORD }}
+      DATA_ZIP_PASSWORD: ${{ secrets.DATA_ZIP_PASSWORD || vars.DATA_ZIP_PASSWORD }}
     steps:
       - name: Checkout app branch
         uses: actions/checkout@v4
@@ -63,6 +63,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-migration.txt
           pip install pyzipper
+
+      - name: Check required configuration presence
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SUPABASE_URL present: $([[ -n "${SUPABASE_URL:-}" ]] && echo yes || echo no)"
+          echo "SUPABASE_SERVICE_ROLE_KEY present: $([[ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ]] && echo yes || echo no)"
+          echo "DATA_ZIP_PASSWORD present: $([[ -n "${DATA_ZIP_PASSWORD:-}" ]] && echo yes || echo no)"
+          test -n "${SUPABASE_URL:-}" || { echo "ERROR: SUPABASE_URL is missing. Add it as a Repository secret or Repository variable in GitHub Actions settings."; exit 1; }
+          test -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || { echo "ERROR: SUPABASE_SERVICE_ROLE_KEY is missing. Add it as a Repository secret, not Streamlit Secrets."; exit 1; }
+          test -n "${DATA_ZIP_PASSWORD:-}" || { echo "ERROR: DATA_ZIP_PASSWORD is missing. Add it as a Repository secret or Repository variable in GitHub Actions settings."; exit 1; }
 
       - name: Prepare data files from data branch
         working-directory: repo
