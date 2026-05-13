@@ -15,6 +15,14 @@ from app_modules.data_loader import (
 )
 from app_modules.manual_queue import is_valid_suno_link, queue_manual_song_url
 from app_modules.player_component import render_player_ranking_html
+from app_modules.supabase_store import (
+    get_current_user_profile,
+    is_login_available,
+    is_logged_in,
+    is_supabase_configured,
+    list_playlists,
+    upsert_user_profile,
+)
 from app_modules.text_utils import (
     fix_mojibake,
     is_fake_rsc_token,
@@ -121,6 +129,89 @@ def display_tab_label(key, raw_title=None):
 def display_tab_description(key, raw_description=None):
     description = clean_payload_text(raw_description or "")
     return description or TAB_DESCRIPTIONS.get(str(key), "")
+
+
+
+def render_auth_status_bar():
+    """Render Google login + Supabase status without breaking the public chart."""
+    login_available = is_login_available()
+    supabase_ready = is_supabase_configured()
+
+    st.markdown(
+        """
+        <style>
+        .suno-auth-box {
+            border: 1px solid #e5e7eb;
+            border-radius: 16px;
+            padding: 12px 14px;
+            background: #ffffff;
+            margin: 6px 0 12px 0;
+        }
+        .suno-auth-small {
+            color: #6b7280;
+            font-size: 12px;
+            line-height: 1.35;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container():
+        col_left, col_mid, col_right = st.columns([1.6, 1.3, 1.0], gap="small")
+
+        with col_left:
+            if is_logged_in():
+                profile = get_current_user_profile() or {}
+                name = profile.get("name") or profile.get("email") or "Google user"
+                email = profile.get("email") or ""
+                st.caption(f"로그인됨: {name}" + (f" · {email}" if email and email != name else ""))
+            else:
+                st.caption("로그인하면 개인 플레이리스트/좋아요/앱 재생 기록 기능을 사용할 수 있습니다.")
+
+        with col_mid:
+            if supabase_ready:
+                if is_logged_in():
+                    saved = upsert_user_profile()
+                    if saved:
+                        st.caption("Supabase 연결됨 · 사용자 프로필 저장 완료")
+                    else:
+                        err = st.session_state.get("supabase_last_error", "")
+                        st.caption("Supabase 연결 확인 필요" + (f": {err[:120]}" if err else ""))
+                else:
+                    st.caption("Supabase 연결됨 · 로그인 대기")
+            else:
+                st.caption("Supabase Secrets 미설정: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 필요")
+
+        with col_right:
+            if not login_available:
+                st.caption("Streamlit 로그인 API를 사용할 수 없습니다. streamlit>=1.42 필요")
+            elif is_logged_in():
+                if st.button("Logout", use_container_width=True):
+                    st.logout()
+            else:
+                if st.button("Login with Google", use_container_width=True):
+                    try:
+                        st.login()
+                    except Exception as exc:
+                        st.error(f"로그인 설정을 확인하세요: {exc}")
+
+    if is_logged_in() and supabase_ready:
+        with st.expander("내 플레이리스트 / Supabase 상태", expanded=False):
+            playlists = list_playlists()
+            if playlists:
+                st.write("저장된 플레이리스트")
+                st.dataframe(
+                    pd.DataFrame(playlists)[["name", "visibility", "updated_at", "created_at"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.caption("아직 저장된 플레이리스트가 없습니다. 다음 단계에서 현재 재생목록 저장 버튼을 연결하면 여기에 표시됩니다.")
+
+            err = st.session_state.get("supabase_last_error", "")
+            if err:
+                st.warning(err)
 
 
 def inject_chart_selector_css():
@@ -779,6 +870,7 @@ def render_manual_song_form():
 # ================================
 
 st.title("Suno Chart v1.05")
+render_auth_status_bar()
 
 try:
     sync_remote_data_files(DATA_RAW_BASE_URL, GITHUB_RAW_TOKEN)
