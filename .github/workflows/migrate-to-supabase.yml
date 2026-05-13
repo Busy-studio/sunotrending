@@ -1,10 +1,10 @@
-name: Migrate CSV to Supabase
+name: Migrate Data Branch to Supabase
 
 on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Parse files only; do not upload"
+        description: "Parse/decrypt only; do not upload to Supabase"
         required: true
         default: "true"
         type: choice
@@ -15,22 +15,45 @@ on:
         description: "Rows per Supabase request"
         required: true
         default: "200"
+      source:
+        description: "Migration input source"
+        required: true
+        default: "data_branch"
+        type: choice
+        options:
+          - "data_branch"
+          - "migration_data_zip"
       input_zip:
-        description: "Zip path in repo, e.g. migration_data/sunotrending-data.zip. Leave blank to use CSV files in migration_data/"
+        description: "Only for migration_data_zip: path such as migration_data/sunotrending-data.zip"
         required: false
         default: "migration_data/sunotrending-data.zip"
+
+concurrency:
+  group: migrate-to-supabase
+  cancel-in-progress: false
 
 jobs:
   migrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      DATA_ZIP_PASSWORD: ${{ secrets.DATA_ZIP_PASSWORD }}
     steps:
-      - name: Checkout repository
+      - name: Checkout main repository
         uses: actions/checkout@v4
+        with:
+          ref: main
+          path: repo
+
+      - name: Checkout data branch
+        if: ${{ inputs.source == 'data_branch' }}
+        uses: actions/checkout@v4
+        with:
+          ref: data
+          path: data_branch
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -38,47 +61,88 @@ jobs:
           python-version: "3.11"
 
       - name: Install migration dependencies
+        working-directory: repo
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-migration.txt
+          # decrypt_data.py uses pyzipper via scripts/secure_csv.py.
+          pip install pyzipper
 
-      - name: Prepare input data
+      - name: Prepare input from data branch
+        if: ${{ inputs.source == 'data_branch' }}
+        working-directory: repo
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf migration_input
-          mkdir -p migration_input
+          rm -rf data
+          mkdir -p data
+
+          if [[ ! -d ../data_branch/data ]]; then
+            echo "data branch was checked out, but ../data_branch/data does not exist."
+            echo "Available files:"
+            find ../data_branch -maxdepth 3 -type f -print || true
+            exit 1
+          fi
+
+          echo "Copying encrypted ZIP files from data branch..."
+          cp -av ../data_branch/data/*.zip data/ || true
+          cp -av ../data_branch/data/manual_song_queue.csv data/ 2>/dev/null || true
+
+          echo "Data files before decrypt:"
+          find data -maxdepth 1 -type f -print
+
+          if ls data/*.zip >/dev/null 2>&1; then
+            test -n "${DATA_ZIP_PASSWORD:-}"
+            python scripts/decrypt_data.py
+          else
+            echo "No encrypted ZIP files found in data branch. Assuming plain CSV/JSON files."
+            cp -av ../data_branch/data/*.csv data/ 2>/dev/null || true
+            cp -av ../data_branch/data/*.json data/ 2>/dev/null || true
+          fi
+
+          echo "Data files after decrypt/copy:"
+          find data -maxdepth 1 -type f -print
+
+      - name: Prepare input from migration_data zip
+        if: ${{ inputs.source == 'migration_data_zip' }}
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf migration_input data
+          mkdir -p migration_input data
           ZIP_PATH="${{ inputs.input_zip }}"
-          if [[ -n "$ZIP_PATH" && -f "$ZIP_PATH" ]]; then
-            echo "Using zip input: $ZIP_PATH"
-            unzip -o "$ZIP_PATH" -d migration_input
-            if [[ -d migration_input/data ]]; then
-              echo "Detected data/ folder inside zip."
-              find migration_input/data -maxdepth 1 -type f -print
-            else
-              echo "No data/ folder detected; using extracted root."
-              find migration_input -maxdepth 1 -type f -print
-            fi
-          else
-            echo "No zip found at '$ZIP_PATH'. Copying files from migration_data/."
-            cp -a migration_data/. migration_input/
-            find migration_input -maxdepth 2 -type f -print
+          if [[ ! -f "$ZIP_PATH" ]]; then
+            echo "No zip found at '$ZIP_PATH'."
+            echo "Upload a zip there, or choose source=data_branch."
+            exit 1
           fi
+          unzip -o "$ZIP_PATH" -d migration_input
+          if [[ -d migration_input/data ]]; then
+            cp -av migration_input/data/. data/
+          else
+            cp -av migration_input/. data/
+          fi
+          find data -maxdepth 1 -type f -print
 
-      - name: Resolve data directory
-        id: data_dir
+      - name: Validate required input files
+        working-directory: repo
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -f migration_input/data/suno_song_db.csv || -f migration_input/data/suno_app_payload.json ]]; then
-            echo "path=migration_input/data" >> "$GITHUB_OUTPUT"
-          else
-            echo "path=migration_input" >> "$GITHUB_OUTPUT"
-          fi
+          echo "Validating data directory..."
+          ls -la data
+          test -f data/suno_song_db.csv
+          test -f data/suno_song_history.csv
+          test -f data/suno_rank_history.csv
+          test -f data/suno_app_payload.json
 
       - name: Dry run / upload to Supabase
+        working-directory: repo
+        shell: bash
         run: |
-          ARGS="--data-dir '${{ steps.data_dir.outputs.path }}' --chunk-size '${{ inputs.chunk_size }}'"
+          set -euo pipefail
+          ARGS="--data-dir data --chunk-size '${{ inputs.chunk_size }}'"
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
             eval "python scripts/migrate_csv_to_supabase.py $ARGS --dry-run"
           else
@@ -89,4 +153,5 @@ jobs:
 
       - name: Check Supabase counts
         if: ${{ inputs.dry_run == 'false' }}
+        working-directory: repo
         run: python scripts/check_supabase_counts.py
