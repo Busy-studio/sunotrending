@@ -708,23 +708,49 @@ def choose_rows_to_update(db):
 
     out = db.copy()
 
+    # 핵심 수정:
+    # 예전 로직은 created_at 최신순으로 head(MAX_UPDATE_ROWS)만 잡아서
+    # active DB가 MAX_UPDATE_ROWS보다 커지면 오래된 active 곡이 영구적으로 업데이트되지 않았다.
+    # 이제는 last_checked_at이 비어 있거나 오래된 곡을 우선 갱신해 전체 active 곡을 순환 업데이트한다.
     if "created_at" in out.columns:
         out["created_at_dt"] = pd.to_datetime(out["created_at"], errors="coerce", utc=True)
-
-        # created_at이 비어 있는 곡은 상세 페이지 재조회 기회가 없으면 계속 Top 200 후보에서 빠질 수 있다.
-        # missing-created 곡을 먼저 업데이트하고, 나머지는 최신 생성순으로 업데이트한다.
-        missing_created = out["created_at_dt"].isna()
-        missing_part = out[missing_created].copy()
-        normal_part = out[~missing_created].sort_values("created_at_dt", ascending=False, na_position="last").copy()
-        out = pd.concat([missing_part, normal_part], ignore_index=True)
-        print(
-            f"[choose_update] max={MAX_UPDATE_ROWS}, "
-            f"missing_created={int(missing_created.sum())}, normal={int((~missing_created).sum())}"
-        )
     else:
-        print(f"[choose_update] created_at column missing, taking first {MAX_UPDATE_ROWS}")
+        out["created_at_dt"] = pd.NaT
 
-    return out.head(MAX_UPDATE_ROWS).drop(columns=["created_at_dt"], errors="ignore").copy()
+    if "last_checked_at" in out.columns:
+        out["last_checked_at_dt"] = pd.to_datetime(out["last_checked_at"], errors="coerce", utc=True)
+    else:
+        out["last_checked_at_dt"] = pd.NaT
+
+    missing_created = out["created_at_dt"].isna()
+    never_checked = out["last_checked_at_dt"].isna()
+
+    # 1) created_at missing: 상세 재조회로 복구 가능성이 있으므로 최우선
+    # 2) last_checked_at missing/oldest: 업데이트 누락 방지
+    # 3) 같은 조건에서는 최신 생성곡 우선
+    out["_missing_created_priority"] = (~missing_created).astype(int)
+    out = out.sort_values(
+        by=["_missing_created_priority", "last_checked_at_dt", "created_at_dt"],
+        ascending=[True, True, False],
+        na_position="first",
+    )
+
+    print(
+        f"[choose_update] max={MAX_UPDATE_ROWS}, "
+        f"missing_created={int(missing_created.sum())}, "
+        f"never_checked={int(never_checked.sum())}, "
+        f"db_rows={len(out)}"
+    )
+
+    return (
+        out.head(MAX_UPDATE_ROWS)
+        .drop(columns=[
+            "created_at_dt",
+            "last_checked_at_dt",
+            "_missing_created_priority",
+        ], errors="ignore")
+        .copy()
+    )
 
 
 def restore_created_at_from_history(db):
