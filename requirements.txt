@@ -1,3 +1,5 @@
+# Streamlit 1.57.0 has reported OAuth state/cookie regressions on callback.
+# Pin to 1.56.0 for stable st.login() behavior.
 streamlit==1.56.0
 pandas
 requests

@@ -301,6 +301,66 @@ def render_player_ranking_html(
         border-color: var(--accent);
     }
 
+    .cloud-playlist-box {
+        border: 1px solid var(--line);
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 10px;
+        margin: 10px 0 12px 0;
+    }
+
+    .cloud-playlist-title {
+        font-size: 12px;
+        font-weight: 900;
+        margin-bottom: 7px;
+        color: var(--text);
+    }
+
+    .cloud-playlist-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .cloud-playlist-input {
+        min-width: 0;
+        border: 1px solid var(--line-dark);
+        border-radius: 999px;
+        padding: 8px 10px;
+        font-size: 12px;
+        outline: none;
+    }
+
+    .cloud-playlist-input:focus { border-color: var(--accent); }
+
+    .cloud-playlist-save {
+        border: 1px solid var(--accent);
+        background: var(--accent);
+        color: #ffffff;
+        border-radius: 999px;
+        padding: 8px 10px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+    }
+
+    .cloud-playlist-save:disabled {
+        background: #f3f4f6;
+        color: var(--muted);
+        border-color: var(--line-dark);
+        cursor: not-allowed;
+    }
+
+    .cloud-playlist-status {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+        min-height: 15px;
+    }
+
     .playlist-head {
         display: flex;
         justify-content: space-between;
@@ -870,6 +930,15 @@ def render_player_ranking_html(
                 <button class="loudness-btn" id="loudnessNormalizeBtn" title="분석된 LUFS/True Peak 값으로 -14 LUFS 기준 재생 볼륨을 보정합니다.">-14 LUFS OFF</button>
             </div>
 
+            <div class="cloud-playlist-box">
+                <div class="cloud-playlist-title">Cloud Playlist</div>
+                <div class="cloud-playlist-row">
+                    <input class="cloud-playlist-input" id="cloudPlaylistName" placeholder="저장할 플레이리스트 이름">
+                    <button class="cloud-playlist-save" id="cloudSavePlaylistBtn">저장</button>
+                </div>
+                <div class="cloud-playlist-status" id="cloudPlaylistStatus">로그인 후 현재 JS 플레이리스트를 Supabase에 저장할 수 있습니다.</div>
+            </div>
+
             <div class="playlist-head">
                 <div class="playlist-title">Playlist</div>
                 <div class="playlist-count" id="playlistCount">0 tracks</div>
@@ -1022,6 +1091,9 @@ def render_player_ranking_html(
     const volumeText = document.getElementById("volumeText");
     const loudnessNormalizeBtn = document.getElementById("loudnessNormalizeBtn");
     const loudnessStatus = document.getElementById("loudnessStatus");
+    const cloudPlaylistName = document.getElementById("cloudPlaylistName");
+    const cloudSavePlaylistBtn = document.getElementById("cloudSavePlaylistBtn");
+    const cloudPlaylistStatus = document.getElementById("cloudPlaylistStatus");
     const progress = document.getElementById("progress");
     const currentTimeEl = document.getElementById("currentTime");
     const durationEl = document.getElementById("duration");
@@ -1304,6 +1376,84 @@ function cycleSort(key) {
         return tags.slice(0, 8).map(tag => {
             return `<span class="now-style-tag" title="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`;
         }).join("");
+    }
+
+    function makeRequestId(prefix = "req") {
+        try {
+            if (window.crypto && window.crypto.randomUUID) {
+                return `${prefix}-${window.crypto.randomUUID()}`;
+            }
+        } catch (e) {}
+        return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function compactPlaylistSong(song) {
+        if (!song) return null;
+        return {
+            id: String(song.id || ""),
+            title: song.title || "",
+            creator: song.creator || "",
+            handle: song.handle || "",
+            style_tags: song.style_tags || "",
+            song_url: song.song_url || "",
+            audio_url: song.audio_url || "",
+            image_url: song.image_url || "",
+            lyrics: song.lyrics || "",
+            integrated_lufs: song.integrated_lufs,
+            true_peak_db: song.true_peak_db,
+            loudness_gain_db: song.loudness_gain_db,
+        };
+    }
+
+    function currentPlaylistStatePayload() {
+        const currentSong = getCurrentSong();
+        return {
+            playlist: playlist.map(compactPlaylistSong).filter(Boolean),
+            currentSongId: currentSong ? String(currentSong.id) : null,
+            currentTime: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
+            duration: Number.isFinite(audio.duration) ? audio.duration : 0,
+            isPlaying: false,
+            audioSrc: audio && audio.src ? audio.src : null,
+            repeatOne,
+            repeatAll,
+            playbackMode,
+            volume: Number(volume.value || 80),
+            loudnessNormalize,
+            savedAt: Date.now(),
+        };
+    }
+
+    function updateCloudPlaylistStatus(text) {
+        if (cloudPlaylistStatus) {
+            cloudPlaylistStatus.textContent = text || "";
+        }
+    }
+
+    function requestCloudPlaylistSave() {
+        if (!playlist.length) {
+            alert("저장할 플레이리스트가 비어 있습니다.");
+            return;
+        }
+
+        const name = String(cloudPlaylistName && cloudPlaylistName.value ? cloudPlaylistName.value : "").trim()
+            || `Suno Playlist ${new Date().toLocaleString()}`;
+        const state = currentPlaylistStatePayload();
+        const request = {
+            type: "save_playlist",
+            requestId: makeRequestId("playlist"),
+            requestedAt: Date.now(),
+            name,
+            playlist: state.playlist,
+            state,
+        };
+
+        try {
+            window.localStorage.setItem("sunoTrending.cloudSaveRequest.v1", JSON.stringify(request));
+            updateCloudPlaylistStatus(`저장 요청 전송됨: ${name} (${playlist.length}곡)`);
+        } catch (error) {
+            console.warn("Failed to request cloud playlist save", error);
+            updateCloudPlaylistStatus("브라우저 저장소 접근 실패로 저장 요청을 만들지 못했습니다.");
+        }
     }
 
     function savePlaylistState(force = false) {
@@ -2021,6 +2171,10 @@ function cycleSort(key) {
         repeatAllBtn.classList.toggle("active", repeatAll);
         sequenceBtn.classList.toggle("active", playbackMode === "sequence");
         shuffleBtn.classList.toggle("active", playbackMode === "shuffle");
+    }
+
+    if (cloudSavePlaylistBtn) {
+        cloudSavePlaylistBtn.addEventListener("click", requestCloudPlaylistSave);
     }
 
     playBtn.addEventListener("click", togglePlay);

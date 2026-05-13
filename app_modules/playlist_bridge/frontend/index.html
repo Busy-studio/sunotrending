@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { margin: 0; padding: 0; background: transparent; font-family: sans-serif; }
+    #status { color: #6b7280; font-size: 11px; line-height: 18px; height: 20px; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <div id="status">playlist bridge ready</div>
+  <script>
+    const PLAYLIST_KEY = "sunoTrending.playlist.v1";
+    const SAVE_REQUEST_KEY = "sunoTrending.cloudSaveRequest.v1";
+    const LAST_SENT_KEY = "sunoTrending.cloudSaveRequest.lastSent.v1";
+    const LOAD_APPLIED_KEY = "sunoTrending.cloudLoad.applied.v1";
+
+    let renderArgs = {};
+    let lastSentInMemory = "";
+
+    function sendMessage(type, payload) {
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type,
+        ...payload,
+      }, "*");
+    }
+
+    function setComponentValue(value) {
+      sendMessage("streamlit:setComponentValue", {
+        value,
+        dataType: "json",
+      });
+    }
+
+    function setFrameHeight(height) {
+      sendMessage("streamlit:setFrameHeight", { height: height || 24 });
+    }
+
+    function ready() {
+      sendMessage("streamlit:componentReady", { apiVersion: 1 });
+      setFrameHeight(24);
+    }
+
+    function status(text) {
+      const el = document.getElementById("status");
+      if (el) el.textContent = text || "";
+    }
+
+    function applyLoadStateIfNeeded() {
+      const args = renderArgs || {};
+      const loadState = args.loadState;
+      const loadRequestId = String(args.loadRequestId || "");
+      if (!loadState || !loadRequestId) return;
+
+      const appliedId = window.localStorage.getItem(LOAD_APPLIED_KEY) || "";
+      if (appliedId === loadRequestId) return;
+
+      try {
+        window.localStorage.setItem(PLAYLIST_KEY, JSON.stringify(loadState));
+        window.localStorage.setItem(LOAD_APPLIED_KEY, loadRequestId);
+        status("playlist loaded into browser");
+        setComponentValue({
+          type: "load_applied",
+          loadRequestId,
+          playlistLength: Array.isArray(loadState.playlist) ? loadState.playlist.length : 0,
+          at: Date.now(),
+        });
+      } catch (error) {
+        status("playlist load failed");
+        setComponentValue({
+          type: "bridge_error",
+          message: String(error && error.message ? error.message : error),
+          at: Date.now(),
+        });
+      }
+    }
+
+    function pollSaveRequest() {
+      try {
+        const raw = window.localStorage.getItem(SAVE_REQUEST_KEY);
+        if (!raw) return;
+
+        const request = JSON.parse(raw);
+        const requestId = String(request.requestId || request.requestedAt || "");
+        if (!requestId) return;
+
+        const lastSent = window.localStorage.getItem(LAST_SENT_KEY) || lastSentInMemory;
+        if (lastSent === requestId) return;
+
+        lastSentInMemory = requestId;
+        window.localStorage.setItem(LAST_SENT_KEY, requestId);
+        window.localStorage.removeItem(SAVE_REQUEST_KEY);
+
+        status("sending playlist save request");
+        setComponentValue({
+          type: "save_playlist",
+          requestId,
+          request,
+          at: Date.now(),
+        });
+      } catch (error) {
+        status("save request bridge error");
+        setComponentValue({
+          type: "bridge_error",
+          message: String(error && error.message ? error.message : error),
+          at: Date.now(),
+        });
+      }
+    }
+
+    window.addEventListener("message", (event) => {
+      const data = event.data || {};
+      if (!data.isStreamlitMessage || data.type !== "streamlit:render") return;
+      renderArgs = data.args || {};
+      applyLoadStateIfNeeded();
+      setFrameHeight(24);
+    });
+
+    ready();
+    applyLoadStateIfNeeded();
+    setInterval(pollSaveRequest, 700);
+    pollSaveRequest();
+  </script>
+</body>
+</html>
