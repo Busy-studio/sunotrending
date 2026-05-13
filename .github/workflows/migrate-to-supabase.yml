@@ -1,0 +1,92 @@
+name: Migrate CSV to Supabase
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Parse files only; do not upload"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      chunk_size:
+        description: "Rows per Supabase request"
+        required: true
+        default: "200"
+      input_zip:
+        description: "Zip path in repo, e.g. migration_data/sunotrending-data.zip. Leave blank to use CSV files in migration_data/"
+        required: false
+        default: "migration_data/sunotrending-data.zip"
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install migration dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-migration.txt
+
+      - name: Prepare input data
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf migration_input
+          mkdir -p migration_input
+          ZIP_PATH="${{ inputs.input_zip }}"
+          if [[ -n "$ZIP_PATH" && -f "$ZIP_PATH" ]]; then
+            echo "Using zip input: $ZIP_PATH"
+            unzip -o "$ZIP_PATH" -d migration_input
+            if [[ -d migration_input/data ]]; then
+              echo "Detected data/ folder inside zip."
+              find migration_input/data -maxdepth 1 -type f -print
+            else
+              echo "No data/ folder detected; using extracted root."
+              find migration_input -maxdepth 1 -type f -print
+            fi
+          else
+            echo "No zip found at '$ZIP_PATH'. Copying files from migration_data/."
+            cp -a migration_data/. migration_input/
+            find migration_input -maxdepth 2 -type f -print
+          fi
+
+      - name: Resolve data directory
+        id: data_dir
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f migration_input/data/suno_song_db.csv || -f migration_input/data/suno_app_payload.json ]]; then
+            echo "path=migration_input/data" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=migration_input" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dry run / upload to Supabase
+        run: |
+          ARGS="--data-dir '${{ steps.data_dir.outputs.path }}' --chunk-size '${{ inputs.chunk_size }}'"
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            eval "python scripts/migrate_csv_to_supabase.py $ARGS --dry-run"
+          else
+            test -n "$SUPABASE_URL"
+            test -n "$SUPABASE_SERVICE_ROLE_KEY"
+            eval "python scripts/migrate_csv_to_supabase.py $ARGS"
+          fi
+
+      - name: Check Supabase counts
+        if: ${{ inputs.dry_run == 'false' }}
+        run: python scripts/check_supabase_counts.py
