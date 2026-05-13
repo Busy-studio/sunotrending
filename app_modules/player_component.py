@@ -2185,12 +2185,17 @@ function cycleSort(key) {
             return;
         }
 
+        const currentSong = getCurrentSong();
         const sameSong = currentSong && String(currentSong.id) === String(song.id);
+
         if (sameSong) {
             togglePlay();
             return;
         }
 
+        // Public mode: do not build or persist a user playlist.
+        // Use the hidden native player state only as a single-track queue so the
+        // album cover in the chart can act as play/pause.
         playlist = [song];
         currentIndex = 0;
         loadCurrent(true, { skipInitialSave: true });
