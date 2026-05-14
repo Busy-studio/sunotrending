@@ -73,8 +73,13 @@ def pull_tables_to_csv(tables: Optional[Iterable[str]] = None) -> Dict[str, int]
         if tables and table not in tables:
             continue
         rows = _fetch_all(sb, table)
-        df = pd.DataFrame(rows)
-        # Supabase may include no rows and therefore no columns; keep expected empty file if available.
+        if rows:
+            df = pd.DataFrame(rows)
+        else:
+            # Keep headers even when a table has 0 rows.
+            # Otherwise pandas writes an effectively empty file and the next push crashes
+            # with EmptyDataError: No columns to parse from file.
+            df = pd.DataFrame(columns=TABLE_COLUMNS.get(table, []))
         df.to_csv(path, index=False, encoding="utf-8-sig")
         counts[table] = len(df)
         print(f"[supabase_pull] {table}: {len(df)} rows -> {path}")
@@ -97,7 +102,12 @@ def _clean_cell(value):
 def _records_from_csv(path: Path, table: str) -> List[dict]:
     if not path.exists():
         return []
-    df = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    try:
+        df = pd.read_csv(path, dtype=str, keep_default_na=False)
+    except pd.errors.EmptyDataError:
+        return []
     allowed = TABLE_COLUMNS.get(table)
     if allowed:
         for col in allowed:
@@ -150,9 +160,15 @@ def push_app_payload(payload_path: Path = DATA_DIR / "suno_app_payload.json") ->
         print(f"[supabase_payload] missing {payload_path}, skipped")
         return False
     payload_text = payload_path.read_text(encoding="utf-8")
-    # Replace latest row. This works whether payload_json is text or jsonb-compatible.
+    try:
+        payload_value = json.loads(payload_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid app payload JSON: {exc}") from exc
+
+    # Store as a real JSON object. If app_payloads.payload_json is jsonb, this is required;
+    # sending the payload as a plain string would save a JSON string instead of an object.
     sb.table("app_payloads").upsert(
-        {"key": "latest", "payload_json": payload_text},
+        {"key": "latest", "payload_json": payload_value},
         on_conflict="key",
     ).execute()
     print(f"[supabase_payload] uploaded latest from {payload_path} bytes={len(payload_text.encode('utf-8'))}")
