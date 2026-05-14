@@ -64,19 +64,19 @@ def render_player_ranking_html(
 
     .app-shell {
         display: grid;
-        grid-template-columns: 330px minmax(720px, 1fr);
+        grid-template-columns: minmax(520px, 1fr) 330px 300px;
         gap: 16px;
         width: 100%;
-        height: 1200px;
+        height: 1080px;
         min-height: 0;
         align-items: stretch;
     }
 
     .app-shell.public-mode {
-        grid-template-columns: minmax(720px, 1fr);
+        grid-template-columns: minmax(520px, 1fr) 330px 300px;
     }
 
-    .app-shell.public-mode .player-panel {
+    .app-shell.public-mode .queue-panel {
         display: none;
     }
 
@@ -87,6 +87,22 @@ def render_player_ranking_html(
         background: rgba(255,253,248,.88);
         border: 1px solid var(--line);
         box-shadow: 0 14px 42px rgba(72,60,47,.07);
+        border-radius: 18px;
+        padding: 14px;
+        height: 100%;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .ranking-panel { order: 1; }
+    .player-panel { order: 2; }
+    .queue-panel {
+        order: 3;
+        background: rgba(255,253,248,.88);
+        border: 1px solid var(--line);
+        box-shadow: 0 14px 42px rgba(72,60,47,.055);
         border-radius: 18px;
         padding: 14px;
         height: 100%;
@@ -438,7 +454,7 @@ def render_player_ranking_html(
         background: #ffffff;
         border-radius: 12px;
         overflow-y: auto;
-        height: 260px;
+        height: auto; flex: 1; min-height: 240px;
     }
 
     .playlist-empty {
@@ -453,7 +469,7 @@ def render_player_ranking_html(
         grid-template-columns: 34px 1fr 28px;
         gap: 8px;
         align-items: center;
-        padding: 8px;
+        padding: 7px 6px;
         border-bottom: 1px solid var(--line);
         cursor: pointer;
     }
@@ -588,14 +604,14 @@ def render_player_ranking_html(
     table.song-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 14px;
+        font-size: 13px;
         table-layout: fixed;
         color: var(--text);
     }
 
     .song-table th {
         text-align: left;
-        padding: 11px 8px;
+        padding: 10px 6px;
         border-bottom: 1px solid var(--line-dark);
         background: var(--soft);
         position: sticky;
@@ -606,7 +622,7 @@ def render_player_ranking_html(
     }
 
     .song-table td {
-        padding: 8px;
+        padding: 7px 6px;
         border-bottom: 1px solid var(--line);
         vertical-align: middle;
         color: var(--text);
@@ -802,6 +818,29 @@ def render_player_ranking_html(
         color: var(--text);
     }
 
+
+    .like-btn {
+        border: 1px solid var(--line-dark);
+        background: #ffffff;
+        color: var(--text);
+        border-radius: 999px;
+        padding: 6px 9px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+        min-width: 58px;
+    }
+    .like-btn.active {
+        background: #e7eee2;
+        border-color: var(--accent);
+        color: var(--accent-dark);
+    }
+    .like-btn:disabled {
+        opacity: .6;
+        cursor: wait;
+    }
+
     .rank-info-btn {
         border: 1px solid var(--line-dark);
         background: #ffffff;
@@ -942,9 +981,10 @@ def render_player_ranking_html(
             min-height: 0;
         }
 
-        .player-panel {
+        .ranking-panel, .player-panel, .queue-panel {
+            order: initial;
             position: relative;
-            height: 1180px;
+            height: auto;
             max-height: none;
         }
 
@@ -955,6 +995,40 @@ def render_player_ranking_html(
     </style>
 
     <div class="app-shell{shell_extra_class}" id="appShell">
+        <main class="ranking-panel">
+            <div class="ranking-topbar">
+                <div>
+                    <div class="rank-view-tabs" id="rankViewTabs"></div>
+                    <div class="ranking-title" id="rankingTitle">{title_html}</div>
+                    <div class="ranking-sub" id="rankingSub">{subtitle_html}</div>
+                </div>
+                <input class="search-input" id="searchInput" placeholder="Search title / style / creator / handle">
+            </div>
+
+            <div class="table-wrap">
+                <table class="song-table">
+                    <thead>
+                        <tr>
+                            <th class="select-col" style="width:42px; text-align:center;">＋</th>
+                            <th class="sortable" data-sort-key="rank" style="width:42px; text-align:right;">순위<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="has_image" style="width:64px;">앨범<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="title" style="width:260px;">곡 정보<span class="sort-indicator"></span></th>
+                            <th style="width:150px;">스타일</th>
+                            <th class="sortable" data-sort-key="play_count" style="width:66px; text-align:right;">재생<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="upvote_count" style="width:78px; text-align:center;">좋아요<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="comment_count" style="width:58px; text-align:right;">댓글<span class="sort-indicator"></span></th>
+                            <th style="width:78px; text-align:center;">상세</th>
+                        </tr>
+                    </thead>
+                    <tbody id="songTableBody"></tbody>
+                </table>
+            </div>
+
+            <div class="footer-credit">
+                Busy Chart
+            </div>
+        </main>
+
         <aside class="player-panel">
             <div class="now-cover-wrap" id="nowCoverWrap">
                 <div class="now-placeholder">No track selected</div>
@@ -999,8 +1073,11 @@ def render_player_ranking_html(
                 <button class="loudness-btn" id="loudnessNormalizeBtn" title="분석된 LUFS/True Peak 값으로 -14 LUFS 기준 재생 볼륨을 보정합니다.">-14 LUFS OFF</button>
             </div>
 
+        </aside>
+
+        <aside class="queue-panel">
             <div class="cloud-playlist-box">
-                <div class="cloud-playlist-title">Cloud Playlist</div>
+                <div class="cloud-playlist-title">플레이리스트 저장</div>
                 <div class="cloud-playlist-row">
                     <input class="cloud-playlist-input" id="cloudPlaylistName" placeholder="저장할 플레이리스트 이름">
                     <button class="cloud-playlist-save" id="cloudSavePlaylistBtn">저장</button>
@@ -1016,7 +1093,7 @@ def render_player_ranking_html(
             </div>
 
             <div class="playlist-head">
-                <div class="playlist-title">Playlist</div>
+                <div class="playlist-title">현재 플레이리스트</div>
                 <div class="playlist-count" id="playlistCount">0 tracks</div>
             </div>
 
@@ -1028,41 +1105,7 @@ def render_player_ranking_html(
             </div>
         </aside>
 
-        <main class="ranking-panel">
-            <div class="ranking-topbar">
-                <div>
-                    <div class="rank-view-tabs" id="rankViewTabs"></div>
-                    <div class="ranking-title" id="rankingTitle">{title_html}</div>
-                    <div class="ranking-sub" id="rankingSub">{subtitle_html}</div>
-                </div>
-                <input class="search-input" id="searchInput" placeholder="Search title / style / creator / handle">
-            </div>
 
-            <div class="table-wrap">
-                <table class="song-table">
-                    <thead>
-                        <tr>
-                            <th class="select-col" style="width:46px; text-align:center;">선택</th>
-                            <th class="sortable" data-sort-key="rank" style="width:42px; text-align:right;">순위<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="rank_change" style="width:58px; text-align:center;">변동<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="has_image" style="width:76px;">앨범<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="title" style="width:360px;">곡 제목<span class="sort-indicator"></span></th>
-                            <th style="width:170px;">스타일</th>
-                            <th class="sortable" data-sort-key="creator" style="width:210px;">창작자<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="play_count" style="width:76px; text-align:right;">플레이<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="upvote_count" style="width:76px; text-align:right;">좋아요<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="comment_count" style="width:64px; text-align:right;">댓글<span class="sort-indicator"></span></th>
-                            <th style="width:90px; text-align:center;">상세정보</th>
-                        </tr>
-                    </thead>
-                    <tbody id="songTableBody"></tbody>
-                </table>
-            </div>
-
-            <div class="footer-credit">
-                Busy Chart
-            </div>
-        </main>
     </div>
 
     <div class="modal-backdrop" id="rankingModal">
@@ -1575,6 +1618,59 @@ function cycleSort(key) {
         return data;
     }
 
+    function likeApiEnabled() {
+        return Boolean(cloudConfig && cloudConfig.likeEnabled && cloudConfig.supabaseUrl && cloudConfig.anonKey && cloudConfig.sessionId);
+    }
+
+    async function callPublicRpc(functionName, body) {
+        const url = `${String(cloudConfig.supabaseUrl).replace(/[/]$/, "")}/rest/v1/rpc/${functionName}`;
+        const res = await fetch(url, {
+            method: "POST",
+            headers: {
+                "apikey": cloudConfig.anonKey,
+                "Authorization": `Bearer ${cloudConfig.anonKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(body || {})
+        });
+        const text = await res.text();
+        let data = null;
+        if (text) {
+            try { data = JSON.parse(text); } catch (e) { data = text; }
+        }
+        if (!res.ok) {
+            const msg = data && data.message ? data.message : String(text || res.statusText || "Server RPC failed");
+            throw new Error(msg);
+        }
+        return data;
+    }
+
+    async function toggleSongLikeRemote(songId, button) {
+        const song = getSongById(songId);
+        if (!song) return;
+        if (!likeApiEnabled()) {
+            alert("좋아요 기능 설정을 확인하세요.");
+            return;
+        }
+        try {
+            if (button) button.disabled = true;
+            const result = await callPublicRpc("bc_toggle_song_like", {
+                p_song_id: songId,
+                p_actor_key: String(cloudConfig.sessionId)
+            });
+            song.liked = Boolean(result && result.liked);
+            if (result && typeof result.like_count !== "undefined") {
+                song.upvote_count = Number(result.like_count) || 0;
+            }
+            renderTable(searchInput ? searchInput.value : "");
+        } catch (error) {
+            console.warn("toggle like failed", error);
+            alert("좋아요 처리에 실패했습니다.");
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
     function allKnownSongs() {
         const map = new Map();
         (Array.isArray(songs) ? songs : []).forEach(song => {
@@ -1984,7 +2080,7 @@ function cycleSort(key) {
         if (!filtered.length) {
             songTableBody.innerHTML = `
                 <tr>
-                    <td colspan="11" style="padding:18px; text-align:center; color:#6b7280;">
+                    <td colspan="9" style="padding:18px; text-align:center; color:#6b7280;">
                         표시할 곡이 없습니다.
                     </td>
                 </tr>
@@ -2018,10 +2114,9 @@ function cycleSort(key) {
             return `
                 <tr class="${outlierClass}" data-song-id="${escapeHtml(song.id)}">
                     <td class="select-cell">
-                        <button class="add-btn" data-action="toggle-playlist" data-song-id="${escapeHtml(song.id)}" title="선택 / 해제">+</button>
+                        <button class="add-btn" data-action="toggle-playlist" data-song-id="${escapeHtml(song.id)}" title="플레이리스트 추가 / 제거">+</button>
                     </td>
                     <td class="rank">${song.rank}</td>
-                    <td class="rank-change">${renderRankChange(song.rank_change, song.rank_status)}</td>
                     <td>
                         <div class="cover-cell">
                             <button class="cover-btn" data-action="cover-click" data-song-id="${escapeHtml(song.id)}" title="재생 / 일시정지">
@@ -2031,20 +2126,19 @@ function cycleSort(key) {
                     </td>
                     <td class="title-cell">
                         ${titleHtml} ${outlierBadge}
+                        <div class="subtle">${creatorHtml}${handleHtml ? " · " + escapeHtml(song.handle) : ""}</div>
                         <div class="subtle">${escapeHtml(song.created_at)}</div>
                     </td>
                     <td class="style-cell">
                         ${renderStyleTags(song.style_tags)}
                     </td>
-                    <td class="creator">
-                        ${creatorHtml}
-                        ${handleHtml}
-                    </td>
                     <td class="num">${formatInt(song.play_count)}</td>
-                    <td class="num">${formatInt(song.upvote_count)}</td>
+                    <td class="num" style="text-align:center;">
+                        <button class="like-btn ${song.liked ? "active" : ""}" data-action="toggle-like" data-song-id="${escapeHtml(song.id)}" title="좋아요">♥ <span>${formatInt(song.upvote_count)}</span></button>
+                    </td>
                     <td class="num">${formatInt(song.comment_count)}</td>
                     <td style="text-align:center;">
-                        <button class="rank-info-btn" data-action="rank-info" data-song-id="${escapeHtml(song.id)}">상세정보</button>
+                        <button class="rank-info-btn" data-action="rank-info" data-song-id="${escapeHtml(song.id)}">상세</button>
                     </td>
                 </tr>
             `;
@@ -2068,6 +2162,14 @@ function cycleSort(key) {
                 event.preventDefault();
                 event.stopPropagation();
                 coverClick(btn.dataset.songId);
+            });
+        });
+
+        songTableBody.querySelectorAll("[data-action='toggle-like']").forEach(btn => {
+            btn.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleSongLikeRemote(btn.dataset.songId, btn);
             });
         });
 
@@ -2850,7 +2952,7 @@ function cycleSort(key) {
 
     components.html(
         full_html,
-        height=1220,
+        height=1100,
         scrolling=False,
     )
 

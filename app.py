@@ -175,9 +175,10 @@ def to_float(v, default=0.0):
         return default
 
 
-def song_payload(song: Dict[str, Any], rank: int) -> Dict[str, Any]:
+def song_payload(song: Dict[str, Any], rank: int, liked_ids: set[str] | None = None) -> Dict[str, Any]:
     return {
         "rank": rank,
+        "liked": str(song.get("id") or "") in (liked_ids or set()),
         "rank_change": None,
         "rank_status": "",
         "previous_rank": None,
@@ -220,8 +221,8 @@ def song_payload(song: Dict[str, Any], rank: int) -> Dict[str, Any]:
     }
 
 
-def make_tab(songs: List[Dict[str, Any]], title: str, description: str) -> Dict[str, Any]:
-    return {"title": title, "description": description, "count": len(songs), "songs": [song_payload(s, i+1) for i, s in enumerate(songs)], "histories": {}}
+def make_tab(songs: List[Dict[str, Any]], title: str, description: str, liked_ids: set[str] | None = None) -> Dict[str, Any]:
+    return {"title": title, "description": description, "count": len(songs), "songs": [song_payload(s, i+1, liked_ids) for i, s in enumerate(songs)], "histories": {}}
 
 
 def build_tabs() -> tuple[Dict[str, Dict], List[str]]:
@@ -229,11 +230,13 @@ def build_tabs() -> tuple[Dict[str, Dict], List[str]]:
     newest = list_songs(300, order="new")
     liked = list_songs(300, order="liked")
     played = list_songs(300, order="played")
+    all_ids = list({str(s.get("id")) for group in [trending, newest, liked, played] for s in group if s.get("id")})
+    liked_ids = liked_song_ids(all_ids)
     tabs = {
-        "trending": make_tab(trending, "Trending", "앱 내부 재생·좋아요·댓글 기반 차트"),
-        "new": make_tab(newest, "New Uploads", "최근 업로드된 곡"),
-        "liked": make_tab(liked, "Most Liked", "좋아요가 많은 곡"),
-        "played": make_tab(played, "Most Played", "재생수가 많은 곡"),
+        "trending": make_tab(trending, "Trending", "앱 내부 재생·좋아요·댓글 기반 차트", liked_ids),
+        "new": make_tab(newest, "New Uploads", "최근 업로드된 곡", liked_ids),
+        "liked": make_tab(liked, "Most Liked", "좋아요가 많은 곡", liked_ids),
+        "played": make_tab(played, "Most Played", "재생수가 많은 곡", liked_ids),
     }
     return tabs, ["trending", "new", "liked", "played"]
 
@@ -257,20 +260,21 @@ def render_old_chart_component():
     songs_json = json.dumps(first["songs"], ensure_ascii=False).replace("</", "<\\/")
     public_cfg = get_public_config()
     cloud_cfg = {
-        "enabled": False,
-        "playerEnabled": bool(is_logged_in()),
+        "enabled": bool(is_logged_in()),
+        "playerEnabled": True,
         "playRecordEnabled": True,
+        "likeEnabled": True,
         "supabaseUrl": public_cfg.get("supabase_url", ""),
         "anonKey": public_cfg.get("supabase_anon_key", ""),
         "sessionId": get_session_id(),
-        "message": "플레이리스트는 상단 메뉴에서 관리합니다.",
+        "message": "로그인 후 현재 플레이리스트를 저장할 수 있습니다.",
     }
     render_player_ranking_html(
         songs_json,
         "{}",
         ranking_config_json(),
         title="Busy Chart",
-        subtitle="앨범 이미지를 누르면 재생/일시정지됩니다.",
+        subtitle="앨범 이미지를 누르면 재생/일시정지됩니다. 좋아요는 차트에서 바로 반영됩니다.",
         tabs_json=tabs_json,
         tabs_order_json=order_json,
         default_tab_key="trending",
@@ -282,7 +286,6 @@ def render_chart():
     if not is_supabase_ready():
         st.warning("Supabase 설정을 확인하세요.")
     render_old_chart_component()
-    render_community_panel()
 
 
 def render_community_panel():

@@ -1,7 +1,6 @@
-streamlit==1.56.0
+streamlit>=1.42
 pandas
 supabase
 numpy
 soundfile
 pyloudnorm
-Authlib>=1.3.2
