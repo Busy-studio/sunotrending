@@ -8,31 +8,31 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: suno-supabase-update
-  cancel-in-progress: false
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  MAX_UPDATE_ROWS: "0"
+  NEW_MODE_MAX_UPDATE_ROWS: "0"
   REQUEST_SLEEP_SECONDS: "0.8"
-  KEEP_EXPIRED_SONGS_IN_DB: "1"
-  NEW_MAX_UPDATE_ROWS: "0"
+  UPDATE_TIERING_ENABLED: "1"
+  COMMENT_DB_ENABLED: "1"
+  COMPACT_HISTORY: "1"
 
 jobs:
-  update-new-songs:
+  update-new:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: suno-supabase-update
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-      - name: Install dependencies
-        run: |
+      - run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Update new songs and payload
-        run: python scripts/update_supabase_data.py --mode new --new-max-update-rows "$NEW_MAX_UPDATE_ROWS"
+      - run: python scripts/update_supabase_data.py --mode new --max-update-rows "$MAX_UPDATE_ROWS"

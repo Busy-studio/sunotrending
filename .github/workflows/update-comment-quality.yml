@@ -8,29 +8,29 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: suno-supabase-update
-  cancel-in-progress: false
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-  KEEP_EXPIRED_SONGS_IN_DB: "1"
+  COMMENT_DB_ENABLED: "1"
+  COMMENT_ANALYZE_TOP_N: "200"
+  COMMENT_MAX_PAGES: "3"
+  COMMENT_MAX_ITEMS_PER_SONG: "120"
 
 jobs:
-  update-comment-quality:
+  update-comments:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
+    concurrency:
+      group: suno-supabase-update
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-      - name: Install dependencies
-        run: |
+      - run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Update comment quality and payload
-        run: python scripts/update_supabase_data.py --mode comments
+      - run: python scripts/update_supabase_data.py --mode comments
