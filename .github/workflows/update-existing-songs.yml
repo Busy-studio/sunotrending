@@ -1,0 +1,48 @@
+name: Update Existing Suno Songs
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_update_rows:
+        description: "Rows to refresh"
+        required: true
+        default: "1200"
+  schedule:
+    - cron: "5,20,35,50 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: suno-supabase-update
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  REQUEST_SLEEP_SECONDS: "0.8"
+  KEEP_EXPIRED_SONGS_IN_DB: "1"
+  DEFAULT_MAX_UPDATE_ROWS: "1200"
+
+jobs:
+  update-existing-songs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Update existing song stats and payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROWS="${{ github.event.inputs.max_update_rows || '' }}"
+          if [[ -z "$ROWS" ]]; then ROWS="$DEFAULT_MAX_UPDATE_ROWS"; fi
+          python scripts/update_supabase_data.py --mode existing --max-update-rows "$ROWS"

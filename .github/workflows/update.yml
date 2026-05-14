@@ -6,60 +6,38 @@ on:
       mode:
         description: "Update mode"
         required: true
-        default: "full"
+        default: "existing"
         type: choice
         options:
           - full
+          - new
           - existing
-  schedule:
-    # 00/30 UTC: discover new songs + update existing rows
-    - cron: "0,30 * * * *"
-    # 15/45 UTC: update existing rows only
-    - cron: "15,45 * * * *"
+          - comments
+          - loudness
+          - payload
+      max_update_rows:
+        description: "Existing-song rows to update"
+        required: true
+        default: "1200"
 
 permissions:
   contents: read
+
+concurrency:
+  group: suno-supabase-update
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-  MAX_UPDATE_ROWS: "1200"
   REQUEST_SLEEP_SECONDS: "0.8"
   KEEP_EXPIRED_SONGS_IN_DB: "1"
-  SKIP_LOUDNESS: "0"
-  SKIP_COMMENT_QUALITY: "0"
 
 jobs:
-  decide:
-    runs-on: ubuntu-latest
-    outputs:
-      mode: ${{ steps.mode.outputs.mode }}
-    steps:
-      - id: mode
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            MODE="${{ inputs.mode }}"
-          else
-            MINUTE="$(date -u +%M)"
-            if [[ "$MINUTE" == "00" || "$MINUTE" == "30" ]]; then
-              MODE="full"
-            else
-              MODE="existing"
-            fi
-          fi
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
-          echo "Selected mode: $MODE"
-
   update-supabase:
-    needs: decide
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    concurrency:
-      group: suno-supabase-update
-      cancel-in-progress: false
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -83,9 +61,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Update Supabase data
-        env:
-          UPDATE_MODE: ${{ needs.decide.outputs.mode }}
+      - name: Run selected update stage
         run: |
           set -euo pipefail
-          python scripts/update_supabase_data.py --mode "$UPDATE_MODE" --max-update-rows "$MAX_UPDATE_ROWS"
+          python scripts/update_supabase_data.py \
+            --mode "${{ inputs.mode }}" \
+            --max-update-rows "${{ inputs.max_update_rows }}"
