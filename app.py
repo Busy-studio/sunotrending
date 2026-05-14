@@ -1,1080 +1,385 @@
-import os
-import math
-import json
-import pandas as pd
+from __future__ import annotations
+
+import html
+from datetime import datetime, timezone
+from typing import Dict, List
+
 import streamlit as st
-from app_modules.data_loader import (
-    APP_PAYLOAD_ZIP_PATH,
-    DB_ZIP_PATH,
-    HISTORY_ZIP_PATH,
-    file_fingerprint,
-    load_app_payload,
-    load_encrypted_data,
-    payload_to_df,
-    sync_remote_data_files,
-)
-from app_modules.manual_queue import is_valid_suno_link, queue_manual_song_url
-from app_modules.player_component import render_player_ranking_html
-from app_modules.supabase_chart_loader import load_supabase_app_payload
-from app_modules.supabase_store import (
-    ensure_playlist_cloud_token,
-    get_current_user_profile,
-    get_supabase_public_config,
-    is_login_available,
+
+from app_modules.busy_player import render_audio_tracker
+from app_modules.busy_supabase import (
+    MAX_AUDIO_MB,
+    MAX_COVER_MB,
+    add_comment,
+    delete_song,
+    ensure_profile,
+    get_auth_user,
+    get_public_config,
+    get_session_id,
+    get_song,
+    get_supabase_client,
+    get_user_id,
+    has_bad_words,
     is_logged_in,
-    is_supabase_configured,
-    upsert_user_profile,
+    is_login_available,
+    is_supabase_ready,
+    liked_song_ids,
+    list_comments,
+    list_my_songs,
+    list_songs,
+    toggle_comment_like,
+    toggle_song_like,
+    update_profile,
+    update_song,
+    create_song,
 )
-from app_modules.text_utils import (
-    fix_mojibake,
-    is_fake_rsc_token,
-    normalize_handle,
-    safe_float_or_none,
-    safe_int_or_none,
-    safe_text,
-    safe_url,
-)
-from scripts.ranking_core import add_growth_features as core_add_growth_features, score_songs as core_score_songs
-
-
-# data branch에서 ZIP을 받아오기 위한 설정
-# Streamlit secrets 또는 환경변수에 설정:
-# DATA_RAW_BASE_URL = "https://raw.githubusercontent.com/OWNER/REPO/data/data"
-DATA_RAW_BASE_URL = st.secrets.get(
-    "DATA_RAW_BASE_URL",
-    os.getenv("DATA_RAW_BASE_URL", "https://raw.githubusercontent.com/Busy-studio/sunotrending/data/data"),
-).rstrip("/")
-
-GITHUB_RAW_TOKEN = st.secrets.get(
-    "GITHUB_RAW_TOKEN",
-    os.getenv("GITHUB_RAW_TOKEN", ""),
-)
-RETENTION_HOURS = 96  # 4일
-TOP_N = 200
-
-# 고정 랭킹 설정
-GROWTH_WINDOW_HOURS = 3
-MAX_AGE_DAYS = 4
-HIDE_CONTEST = False
-
-PLAY_WEIGHT = 1.0
-LIKE_WEIGHT = 3.0
-COMMENT_WEIGHT = 4.0
-GROWTH_WEIGHT = 1.5
-FRESHNESS_WEIGHT = 35.0
-FRESHNESS_POWER = 1.35
-
-# 이상치 표시 설정
-OUTLIER_SIGMA = 6.0
-OUTLIER_USE_LOG = True
-
 
 st.set_page_config(
-    page_title="Suno Chart",
+    page_title="Busy Chart v1.0",
+    page_icon="🎧",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
+APP_TITLE = "Busy Chart v1.0"
 
-# Text/value helpers live in app_modules.text_utils.
-# Data loading helpers live in app_modules.data_loader.
 
-def clean_payload_text(value):
-    if value is None:
+def inject_css():
+    st.markdown(
+        """
+        <style>
+        #MainMenu {visibility:hidden;}
+        footer {visibility:hidden;}
+        header[data-testid="stHeader"] {background: rgba(255,255,255,0.85); backdrop-filter: blur(10px);}
+        .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1440px;}
+        .busy-hero {border:1px solid #e5e7eb; border-radius:24px; padding:22px 22px; background:linear-gradient(135deg,#fff,#f8fafc); margin-bottom:14px;}
+        .busy-title {font-size:34px; font-weight:1000; letter-spacing:-0.04em; margin:0;}
+        .busy-subtitle {font-size:14px; color:#6b7280; margin-top:6px;}
+        .busy-card {border:1px solid #e5e7eb; border-radius:20px; padding:14px; background:#fff; height:100%;}
+        .busy-song-grid {display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;}
+        .busy-song-card {border:1px solid #e5e7eb; border-radius:18px; padding:12px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.03);}
+        .busy-cover-img {width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:14px; background:#f3f4f6; display:block;}
+        .busy-song-title {font-weight:900; font-size:15px; margin-top:9px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+        .busy-song-meta {font-size:12px; color:#6b7280; line-height:1.35; margin-top:3px; min-height:32px;}
+        .busy-stats {font-size:12px; color:#374151; display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+        .busy-pill {display:inline-flex; align-items:center; border:1px solid #e5e7eb; border-radius:999px; padding:3px 8px; background:#f9fafb;}
+        .busy-muted {color:#6b7280; font-size:12px;}
+        .busy-section-title {font-size:21px; font-weight:950; letter-spacing:-.02em; margin:12px 0 8px;}
+        .busy-divider {height:1px; background:#e5e7eb; margin:16px 0;}
+        @media (max-width: 900px) {
+          .block-container {padding-left: .75rem; padding-right: .75rem;}
+          .busy-title {font-size:26px;}
+          .busy-song-grid {grid-template-columns: repeat(2, minmax(0, 1fr)); gap:10px;}
+        }
+        @media (max-width: 520px) {
+          .busy-song-grid {grid-template-columns: 1fr;}
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def rerun():
+    try:
+        st.rerun()
+    except Exception:
+        st.experimental_rerun()
+
+
+def render_header():
+    st.markdown(
+        f"""
+        <div class="busy-hero">
+          <div class="busy-title">{APP_TITLE}</div>
+          <div class="busy-subtitle">사용자 업로드 음원 기반 차트 · MP3 + 앨범 이미지 · 앱 내부 재생수/좋아요/댓글 반영</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    left, mid, right = st.columns([1.4, 1.4, 1.0], gap="small")
+    with left:
+        if is_logged_in():
+            profile = ensure_profile() or {}
+            st.caption(f"로그인됨: {profile.get('display_name') or profile.get('email') or 'Busy User'}")
+        else:
+            st.caption("비로그인 상태: 차트 감상, 재생/일시정지, 좋아요 가능 · 업로드/댓글은 로그인 필요")
+    with mid:
+        st.caption("서버 연결됨" if is_supabase_ready() else "서버 설정 필요: SUPABASE_URL / SERVICE_ROLE_KEY")
+    with right:
+        if not is_login_available():
+            st.caption("Streamlit 로그인 API 확인 필요")
+        elif is_logged_in():
+            if st.button("Logout", use_container_width=True):
+                st.logout()
+        else:
+            if st.button("Login with Google", use_container_width=True):
+                st.login()
+
+
+def format_date(value: str) -> str:
+    if not value:
         return ""
     try:
-        if pd.isna(value):
-            return ""
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
     except Exception:
-        pass
-    return fix_mojibake(value).strip()
+        return str(value)[:19]
 
 
-def normalize_payload_song(song):
-    if not isinstance(song, dict):
-        return song
-
-    # payload 경로에서는 CSV 전처리 단계를 건너뛰므로, 화면에 노출되는 텍스트를 한 번 더 복구한다.
-    text_keys = [
-        "title", "creator", "handle", "user_id", "created_at", "style_tags",
-        "song_url", "audio_url", "image_url", "lyrics", "rank_status", "outlier_reasons",
-    ]
-    for key in text_keys:
-        if key in song:
-            song[key] = clean_payload_text(song.get(key))
-
-    return song
+def song_artist(song: Dict) -> str:
+    prof = song.get("bc_profiles") or {}
+    return song.get("artist_name") or prof.get("display_name") or "Unknown"
 
 
-def normalize_payload_songs(songs):
-    return [normalize_payload_song(dict(song)) for song in (songs or []) if isinstance(song, dict)]
-
-
-
-
-TAB_LABELS = {
-    "new_songs": "New Song",
-    "top200": "Top 200",
-    "rain_crew": "☔rain crew",
-}
-
-TAB_DESCRIPTIONS = {
-    "new_songs": "생성일 기준 최신순",
-    "top200": "현재 날짜 기준 4일 이내 전체 DB 곡 중 trend_score 상위 200",
-    "rain_crew": "☔rain crew 멤버 곡 최신순",
-}
-
-def display_tab_label(key, raw_title=None):
-    title = clean_payload_text(raw_title or "")
-    return title or TAB_LABELS.get(str(key), str(key).replace("_", " ").title())
-
-def display_tab_description(key, raw_description=None):
-    description = clean_payload_text(raw_description or "")
-    return description or TAB_DESCRIPTIONS.get(str(key), "")
-
-
-
-
-
-def collect_payload_song_lookup(tabs_payload):
-    """Build a song_id -> song dict lookup from all payload tabs."""
-    lookup = {}
-    if not isinstance(tabs_payload, dict):
-        return lookup
-
-    for tab in tabs_payload.values():
-        if not isinstance(tab, dict):
-            continue
-        for song in tab.get("songs", []) or []:
-            if isinstance(song, dict) and song.get("id"):
-                normalized = normalize_payload_song(dict(song))
-                lookup[str(normalized.get("id"))] = normalized
-    return lookup
-
-
-# Cloud Playlist is now handled directly inside the JS player via Supabase RPC.
-# Keeping the Streamlit side out of save/load/delete prevents full-app reruns
-# while audio is playing.
-
-def render_auth_status_bar():
-    """Render Google login + Supabase status without breaking the public chart."""
-    login_available = is_login_available()
-    supabase_ready = is_supabase_configured()
-
+def render_song_card(song: Dict, rank: int, liked: bool):
+    song_id = str(song.get("id"))
+    cover = song.get("cover_url") or ""
+    title = song.get("title") or "Untitled"
+    artist = song_artist(song)
+    tags = song.get("style_tags") or ""
     st.markdown(
-        """
-        <style>
-        .suno-auth-box {
-            border: 1px solid #e5e7eb;
-            border-radius: 16px;
-            padding: 12px 14px;
-            background: #ffffff;
-            margin: 6px 0 12px 0;
-        }
-        .suno-auth-small {
-            color: #6b7280;
-            font-size: 12px;
-            line-height: 1.35;
-        }
-        </style>
+        f"""
+        <div class="busy-song-card">
+          <img class="busy-cover-img" src="{html.escape(cover)}" onerror="this.style.opacity=.15">
+          <div class="busy-song-title">#{rank} {html.escape(title)}</div>
+          <div class="busy-song-meta">{html.escape(artist)}<br>{html.escape(tags[:90])}</div>
+          <div class="busy-stats">
+            <span class="busy-pill">▶ {int(song.get('play_count') or 0)}</span>
+            <span class="busy-pill">♥ {int(song.get('like_count') or 0)}</span>
+            <span class="busy-pill">💬 {int(song.get('comment_count') or 0)}</span>
+          </div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
-
-    with st.container():
-        col_left, col_mid, col_right = st.columns([1.6, 1.3, 1.0], gap="small")
-
-        with col_left:
-            if is_logged_in():
-                profile = get_current_user_profile() or {}
-                name = profile.get("name") or profile.get("email") or "Google user"
-                email = profile.get("email") or ""
-                st.caption(f"로그인됨: {name}" + (f" · {email}" if email and email != name else ""))
-            else:
-                st.caption("로그인하면 개인 플레이리스트/좋아요/앱 재생 기록 기능을 사용할 수 있습니다.")
-
-        with col_mid:
-            if supabase_ready:
-                if is_logged_in():
-                    try:
-                        saved = upsert_user_profile()
-                    except Exception as exc:
-                        saved = False
-                        st.session_state["supabase_last_error"] = str(exc)
-                    if saved:
-                        st.caption("서버 연결됨 · 사용자 프로필 저장 완료")
-                    else:
-                        err = st.session_state.get("supabase_last_error", "")
-                        st.caption("서버 연결 확인 필요" + (f": {err[:120]}" if err else ""))
-                else:
-                    st.caption("서버 연결됨 · 로그인 대기")
-            else:
-                st.caption("서버 설정 미완료: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 필요")
-
-        with col_right:
-            if not login_available:
-                st.caption("Streamlit 로그인 API를 사용할 수 없습니다. streamlit>=1.42 필요")
-            elif is_logged_in():
-                if st.button("Logout", use_container_width=True):
-                    st.logout()
-            else:
-                if st.button("Login with Google", use_container_width=True):
-                    try:
-                        st.login()
-                    except Exception as exc:
-                        st.error(f"로그인 설정을 확인하세요: {exc}")
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("♥ 좋아요" if not liked else "♥ 취소", key=f"like_{song_id}", use_container_width=True):
+            toggle_song_like(song_id)
+            rerun()
+    with b2:
+        if st.button("상세", key=f"detail_{song_id}", use_container_width=True):
+            st.session_state["selected_song_id"] = song_id
+            rerun()
 
 
-def inject_chart_selector_css():
-    # Streamlit radio를 기존 HTML 내부 탭(.rank-view-tab)과 비슷한 pill 버튼 스타일로 보이게 만든다.
-    st.markdown(
-        """
-        <style>
-        div[data-testid="stRadio"] {
-            margin: 0 0 8px 0;
-        }
-
-        div[data-testid="stRadio"] > label {
-            display: none;
-        }
-
-        div[data-testid="stRadio"] div[role="radiogroup"] {
-            display: flex;
-            flex-direction: row;
-            flex-wrap: wrap;
-            gap: 7px;
-            align-items: center;
-            margin: 0 0 8px 0;
-        }
-
-        div[data-testid="stRadio"] div[role="radiogroup"] label {
-            border: 1px solid #d1d5db;
-            background: #ffffff;
-            color: #6b7280;
-            border-radius: 999px;
-            padding: 7px 12px;
-            font-size: 12px;
-            font-weight: 900;
-            cursor: pointer;
-            transition: all 0.15s ease;
-            min-height: auto;
-            margin: 0;
-        }
-
-        div[data-testid="stRadio"] div[role="radiogroup"] label:hover {
-            border-color: #ef4444;
-            color: #ef4444;
-        }
-
-        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) {
-            background: #ef4444 !important;
-            border-color: #ef4444 !important;
-            color: #ffffff !important;
-        }
-
-        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) p,
-        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) span {
-            color: #ffffff !important;
-        }
-
-        div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
-            display: none;
-        }
-
-        div[data-testid="stRadio"] div[role="radiogroup"] label p {
-            margin: 0;
-            line-height: 1.2;
-            font-size: 12px;
-            font-weight: 900;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+def render_chart():
+    st.markdown("<div class='busy-section-title'>Chart</div>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        order_label = st.selectbox("정렬", ["Trending", "New", "Most Liked", "Most Played"], label_visibility="collapsed")
+    with c2:
+        limit = st.selectbox("표시", [50, 100, 200, 300], index=0, label_visibility="collapsed")
+    order_map = {"Trending": "score", "New": "new", "Most Liked": "liked", "Most Played": "played"}
+    songs = list_songs(limit=limit, order=order_map[order_label])
+    if not songs:
+        st.info("아직 업로드된 곡이 없습니다. 로그인 후 업로드 페이지에서 첫 곡을 등록해보세요.")
+        return
+    liked = liked_song_ids([str(s.get("id")) for s in songs])
+    cols = st.columns(4)
+    for idx, song in enumerate(songs, start=1):
+        with cols[(idx - 1) % 4]:
+            render_song_card(song, idx, str(song.get("id")) in liked)
+    selected = st.session_state.get("selected_song_id")
+    if selected:
+        st.markdown("<div class='busy-divider'></div>", unsafe_allow_html=True)
+        render_song_detail(selected)
 
 
-def choose_chart_key(tabs_payload, tabs_order, default_key="top200", widget_key="chart_view_selector"):
-    tabs_payload = tabs_payload or {}
-    tabs_order = [key for key in (tabs_order or list(tabs_payload.keys())) if key in tabs_payload]
-
-    if not tabs_order:
-        return None
-
-    labels = []
-    label_to_key = {}
-
-    for key in tabs_order:
-        tab = tabs_payload.get(key, {}) or {}
-        label = display_tab_label(key, tab.get("title"))
-
-        # 혹시 같은 표시명이 생겨도 radio 매핑이 깨지지 않게 방어
-        if label in label_to_key:
-            label = f"{label} ({key})"
-
-        labels.append(label)
-        label_to_key[label] = key
-
-    if default_key not in tabs_order:
-        default_key = tabs_order[0]
-
-    default_label = next((label for label, key in label_to_key.items() if key == default_key), labels[0])
-    default_index = labels.index(default_label) if default_label in labels else 0
-
-    inject_chart_selector_css()
-
-    selected_label = st.radio(
-        "Chart",
-        labels,
-        index=default_index,
-        horizontal=True,
-        label_visibility="collapsed",
-        key=widget_key,
-    )
-
-    return label_to_key.get(selected_label, default_key)
-
-
-def choose_chart_key_above_ranking(tabs_payload, tabs_order, default_key="top200", widget_key="chart_view_selector"):
-    # 왼쪽 플레이어 폭만큼 빈 칸을 두고, 오른쪽 랭킹 패널 위에만 차트 선택 pill을 표시한다.
-    # 이렇게 하면 selector가 플레이리스트/플레이어 영역까지 침범하지 않는다.
-    spacer_col, chart_col = st.columns([330, 1400], gap="small")
-
-    with chart_col:
-        return choose_chart_key(
-            tabs_payload,
-            tabs_order,
-            default_key=default_key,
-            widget_key=widget_key,
+def render_song_detail(song_id: str):
+    song = get_song(song_id)
+    if not song:
+        st.warning("곡을 찾을 수 없습니다.")
+        return
+    title = song.get("title") or "Untitled"
+    st.markdown(f"<div class='busy-section-title'>{html.escape(title)}</div>", unsafe_allow_html=True)
+    left, right = st.columns([1, 1.3], gap="large")
+    with left:
+        if song.get("cover_url"):
+            st.image(song.get("cover_url"), use_container_width=True)
+        render_audio_tracker(
+            song_id=str(song.get("id")),
+            audio_url=song.get("audio_url") or "",
+            title=title,
+            cover_url=song.get("cover_url") or "",
+            public_config=get_public_config(),
+            session_id=get_session_id(),
+            height=112,
         )
+        if st.button("♥ 좋아요 / 취소", key=f"detail_like_{song_id}", use_container_width=True):
+            toggle_song_like(song_id)
+            rerun()
+    with right:
+        st.caption(f"아티스트: {song_artist(song)}")
+        st.caption(f"업로드: {format_date(song.get('created_at'))}")
+        st.write(song.get("description") or "")
+        if song.get("style_tags"):
+            st.markdown(f"**Style Tags**: {song.get('style_tags')}")
+        with st.expander("Lyrics", expanded=False):
+            st.text(song.get("lyrics") or "")
+    render_comments(song)
 
 
-def render_selected_payload_tab(tabs_payload, tabs_order=None, default_key="top200", widget_key="chart_view_selector"):
-    tabs_payload = tabs_payload or {}
-    tabs_order = [key for key in (tabs_order or list(tabs_payload.keys())) if key in tabs_payload]
-
-    if not tabs_order:
-        st.info("표시할 탭 payload가 없습니다.")
+def render_comments(song: Dict):
+    song_id = str(song.get("id"))
+    st.markdown("<div class='busy-section-title'>Comments</div>", unsafe_allow_html=True)
+    if not song.get("comments_enabled", True):
+        st.info("이 곡은 댓글 작성이 비활성화되어 있습니다.")
+    elif is_logged_in():
+        with st.form(f"comment_form_{song_id}", clear_on_submit=True):
+            body = st.text_area("댓글", max_chars=500, placeholder="500자 이하로 작성하세요. 비속어/혐오 표현은 제한됩니다.")
+            submitted = st.form_submit_button("댓글 등록")
+            if submitted:
+                if add_comment(song_id, body):
+                    st.success("댓글이 등록되었습니다.")
+                    rerun()
+    else:
+        st.caption("댓글은 로그인한 사용자만 작성할 수 있습니다. 좋아요는 비로그인도 가능합니다.")
+    comments = list_comments(song_id)
+    if not comments:
+        st.caption("아직 댓글이 없습니다.")
         return
+    for c in comments:
+        with st.container(border=True):
+            st.markdown(f"**{html.escape(c.get('display_name') or 'Busy User')}** · {format_date(c.get('created_at'))}")
+            st.write(c.get("body") or "")
+            if st.button(f"댓글 좋아요 ♥ {int(c.get('like_count') or 0)}", key=f"comment_like_{c.get('id')}"):
+                toggle_comment_like(str(c.get("id")))
+                rerun()
 
-    selected_key = choose_chart_key_above_ranking(
-        tabs_payload,
-        tabs_order,
-        default_key=default_key if default_key in tabs_order else tabs_order[0],
-        widget_key=widget_key,
-    )
 
-    if not selected_key or selected_key not in tabs_payload:
-        st.info("선택한 차트 payload가 없습니다.")
+def render_profile_page():
+    st.markdown("<div class='busy-section-title'>사용자 정보</div>", unsafe_allow_html=True)
+    if not is_logged_in():
+        st.info("로그인이 필요합니다.")
         return
-
-    tab = tabs_payload.get(selected_key, {}) or {}
-
-    render_player_ranking_payload(
-        tab.get("songs", []) or [],
-        histories=tab.get("histories", {}) or {},
-        title=display_tab_label(selected_key, tab.get("title")),
-        subtitle=display_tab_description(selected_key, tab.get("description")),
-    )
-
-def ranking_config_json():
-    ranking_config = {
-        "play_weight": PLAY_WEIGHT,
-        "like_weight": LIKE_WEIGHT,
-        "comment_weight": COMMENT_WEIGHT,
-        "growth_weight": GROWTH_WEIGHT,
-        "freshness_weight": FRESHNESS_WEIGHT,
-        "freshness_power": FRESHNESS_POWER,
-        "growth_window_hours": GROWTH_WINDOW_HOURS,
-    }
-    return json.dumps(ranking_config, ensure_ascii=False)
+    profile = ensure_profile() or {}
+    left, right = st.columns([1, 2])
+    with left:
+        if profile.get("avatar_url"):
+            st.image(profile.get("avatar_url"), width=160)
+    with right:
+        with st.form("profile_form"):
+            display_name = st.text_input("닉네임", value=profile.get("display_name") or "")
+            avatar = st.file_uploader("아바타 이미지", type=["jpg", "jpeg", "png", "webp"])
+            submitted = st.form_submit_button("저장")
+            if submitted:
+                if update_profile(display_name, avatar):
+                    st.success("프로필이 저장되었습니다.")
+                    rerun()
 
 
-def render_player_ranking_payload(songs, histories=None, title="Top 200 Trending", subtitle=None, cloud_config=None):
-    songs = normalize_payload_songs(songs)
-    histories = histories or {}
-
-    songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
-    histories_json = json.dumps(histories, ensure_ascii=False).replace("</", "<\\/")
-
-    return render_player_ranking_html(
-        songs_json,
-        histories_json,
-        ranking_config_json(),
-        title=title,
-        subtitle=subtitle,
-        cloud_config_json=json.dumps(cloud_config or {}, ensure_ascii=False).replace("</", "<\\/"),
-    )
-
-
-def render_player_ranking_payload_tabs(tabs_payload, tabs_order=None, default_key="top200", cloud_config=None):
-    tabs_payload = tabs_payload or {}
-    tabs_order = tabs_order or list(tabs_payload.keys())
-
-    cleaned_tabs = {}
-    for key in tabs_order:
-        tab = tabs_payload.get(key, {}) or {}
-        songs = normalize_payload_songs(tab.get("songs", []) or [])
-        histories = tab.get("histories", {}) or {}
-        title = display_tab_label(key, tab.get("title"))
-        description = display_tab_description(key, tab.get("description"))
-        cleaned_tabs[key] = {
-            "title": title,
-            "description": description,
-            "songs": songs,
-            "histories": histories,
-        }
-
-    tabs_order = [key for key in tabs_order if key in cleaned_tabs]
-
-    if not cleaned_tabs:
-        st.info("표시할 탭 데이터가 없습니다.")
+def render_upload_page():
+    st.markdown("<div class='busy-section-title'>업로드</div>", unsafe_allow_html=True)
+    if not is_logged_in():
+        st.info("업로드는 로그인 후 사용할 수 있습니다.")
         return
-
-    if default_key not in cleaned_tabs:
-        default_key = tabs_order[0] if tabs_order else next(iter(cleaned_tabs.keys()))
-
-    first_tab = cleaned_tabs.get(default_key, {})
-    first_songs = first_tab.get("songs", []) or []
-    first_histories = first_tab.get("histories", {}) or {}
-
-    songs_json = json.dumps(first_songs, ensure_ascii=False).replace("</", "<\\/")
-    histories_json = json.dumps(first_histories, ensure_ascii=False).replace("</", "<\\/")
-    tabs_json = json.dumps(cleaned_tabs, ensure_ascii=False).replace("</", "<\\/")
-    tabs_order_json = json.dumps(tabs_order, ensure_ascii=False).replace("</", "<\\/")
-
-    return render_player_ranking_html(
-        songs_json,
-        histories_json,
-        ranking_config_json(),
-        title=first_tab.get("title") or "Suno Songs",
-        subtitle=first_tab.get("description") or "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다.",
-        tabs_json=tabs_json,
-        tabs_order_json=tabs_order_json,
-        default_tab_key=default_key,
-        cloud_config_json=json.dumps(cloud_config or {}, ensure_ascii=False).replace("</", "<\\/"),
-    )
-
-
-def prepare_db(db):
-    db = db.copy()
-
-    text_cols = [
-        "title",
-        "handle",
-        "display_name",
-        "model",
-        "display_tags",
-        "lyrics",
-        "prompt",
-        "gpt_description_prompt",
-        "rank_status",
-        "comment_quality_summary",
-    ]
-
-    for col in text_cols:
-        if col in db.columns:
-            db[col] = db[col].apply(fix_mojibake)
-
-    for col in ["created_at", "first_seen_at", "last_checked_at", "comment_quality_checked_at"]:
-        if col in db.columns:
-            db[col] = pd.to_datetime(db[col], errors="coerce", utc=True)
-
-    numeric_cols = [
-        "play_count",
-        "upvote_count",
-        "comment_count",
-        "flag_count",
-        "adjusted_comment_count",
-        "comment_quality_ratio",
-        "analyzed_comment_count",
-        "meaningful_count",
-        "generic_count",
-        "mention_only_count",
-        "emoji_only_count",
-        "previous_rank",
-        "current_rank",
-        "rank_change",
-    ]
-
-    for col in numeric_cols:
-        if col in db.columns:
-            db[col] = pd.to_numeric(db[col], errors="coerce")
-        else:
-            db[col] = pd.NA
-
-    for col in ["play_count", "upvote_count", "comment_count", "flag_count"]:
-        db[col] = db[col].fillna(0)
-
-    if "adjusted_comment_count" in db.columns:
-        db["adjusted_comment_count"] = db["adjusted_comment_count"].fillna(db["comment_count"])
-
-    if "comment_quality_ratio" in db.columns:
-        db["comment_quality_ratio"] = db["comment_quality_ratio"].fillna(1)
-
-    if "id" in db.columns:
-        db["id"] = db["id"].astype(str)
-
-    if "song_url" not in db.columns and "id" in db.columns:
-        db["song_url"] = "https://suno.com/song/" + db["id"].astype(str)
-
-    return db
-
-
-
-
-def restore_created_at_from_history_df(db, hist):
-    """Fallback-mode repair: fill missing DB created_at from history before scoring."""
-    if db is None or db.empty or hist is None or hist.empty:
-        return db
-    if "id" not in db.columns or "id" not in hist.columns or "created_at" not in hist.columns:
-        return db
-
-    db = db.copy()
-    hist = hist.copy()
-
-    if "created_at" not in db.columns:
-        db["created_at"] = pd.NaT
-
-    db["id"] = db["id"].astype(str)
-    hist["id"] = hist["id"].astype(str)
-
-    db_created = pd.to_datetime(db["created_at"], errors="coerce", utc=True)
-    hist_created = pd.to_datetime(hist["created_at"], errors="coerce", utc=True)
-    hist = hist.assign(__created_at_dt=hist_created).dropna(subset=["__created_at_dt"])
-
-    if hist.empty:
-        return db
-
-    created_map = hist.groupby("id")["__created_at_dt"].min()
-    missing = db_created.isna()
-    restored = db.loc[missing, "id"].map(created_map)
-    has_restored = restored.notna()
-
-    if has_restored.any():
-        db.loc[missing & has_restored, "created_at"] = restored[has_restored]
-
-    return db
-
-def prepare_history(hist):
-    if hist is None or hist.empty:
-        return pd.DataFrame()
-
-    hist = hist.copy()
-
-    for col in ["title", "handle"]:
-        if col in hist.columns:
-            hist[col] = hist[col].apply(fix_mojibake)
-
-    if "checked_at" in hist.columns:
-        hist["checked_at"] = pd.to_datetime(hist["checked_at"], errors="coerce", utc=True)
-
-    if "created_at" in hist.columns:
-        hist["created_at"] = pd.to_datetime(hist["created_at"], errors="coerce", utc=True)
-
-    for col in ["play_count", "upvote_count", "comment_count", "flag_count"]:
-        if col in hist.columns:
-            hist[col] = pd.to_numeric(hist[col], errors="coerce").fillna(0)
-
-    if "id" in hist.columns:
-        hist["id"] = hist["id"].astype(str)
-
-    return hist
-
-
-# ================================
-# Ranking
-# ================================
-
-def add_growth_features(db, hist, window_hours):
-    """Fallback helper delegated to the shared ranking core."""
-    return core_add_growth_features(db, hist, window_hours)
-
-def score_songs(
-    db,
-    hist,
-    play_weight,
-    like_weight,
-    comment_weight,
-    growth_weight,
-    freshness_weight,
-    growth_window_hours,
-    freshness_power,
-):
-    """Fallback app scoring delegated to the shared ranking core.
-
-    The normal app path uses the prebuilt payload. This fallback stays aligned with
-    GitHub Actions scoring when payload loading is unavailable.
-    """
-    return core_score_songs(
-        db=db,
-        hist=hist,
-        play_weight=play_weight,
-        like_weight=like_weight,
-        comment_weight=comment_weight,
-        growth_weight=growth_weight,
-        freshness_weight=freshness_weight,
-        growth_window_hours=growth_window_hours,
-        freshness_power=freshness_power,
-    )
-
-def add_outlier_flags(df, sigma=3.0, use_log=True):
-    view = df.copy()
-
-    metrics = {
-        "play_count": "play",
-        "upvote_count": "like",
-        "comment_count": "comment",
-    }
-
-    view["is_outlier"] = False
-    view["outlier_reasons"] = ""
-
-    reason_lists = [[] for _ in range(len(view))]
-
-    for col, label in metrics.items():
-        if col not in view.columns:
-            continue
-
-        values = pd.to_numeric(view[col], errors="coerce").fillna(0)
-
-        if use_log:
-            values_for_z = values.apply(lambda x: math.log1p(max(0, x)))
-        else:
-            values_for_z = values
-
-        mean = values_for_z.mean()
-        std = values_for_z.std(ddof=0)
-
-        if std == 0 or pd.isna(std):
-            continue
-
-        z = (values_for_z - mean) / std
-        flag = z >= sigma
-
-        view[f"{label}_zscore"] = z
-        view[f"{label}_outlier"] = flag
-
-        for i, is_flagged in enumerate(flag.tolist()):
-            if is_flagged:
-                raw_value = int(values.iloc[i])
-                reason_lists[i].append(f"{label} {raw_value:,} / z={z.iloc[i]:.2f}")
-
-    view["is_outlier"] = [len(x) > 0 for x in reason_lists]
-    view["outlier_reasons"] = [" | ".join(x) for x in reason_lists]
-
-    return view
-
-
-def filter_view(df):
-    view = df.copy()
-
-    if HIDE_CONTEST:
-        if "is_contest_clip" in view.columns:
-            view = view[view["is_contest_clip"].astype(str).str.lower() != "true"]
-
-        if "download_disabled_reason" in view.columns:
-            view = view[view["download_disabled_reason"].astype(str) != "remix_contest"]
-
-        if "contest_ids" in view.columns:
-            contest_str = view["contest_ids"].astype(str).str.strip().str.lower()
-            view = view[
-                view["contest_ids"].isna()
-                | (contest_str == "")
-                | (contest_str == "nan")
-                | (contest_str == "none")
-            ]
-
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=MAX_AGE_DAYS)
-
-    if "created_at" in view.columns:
-        view = view[view["created_at"].isna() | (view["created_at"] >= cutoff)]
-
-    return view
-
-
-# ================================
-# UI data
-# ================================
-
-def build_song_payload(df):
-    songs = []
-
-    for _, r in df.iterrows():
-        display_name, handle_text = build_creator_display(
-            r.get("display_name", ""),
-            r.get("handle", ""),
-        )
-
-        created_at = r.get("created_at")
-
-        if pd.notna(created_at):
-            created_txt = created_at.strftime("%Y-%m-%d %H:%M UTC")
-        else:
-            created_txt = "-"
-
-        lyrics_candidates = []
-
-        for col in ["lyrics", "prompt", "gpt_description_prompt"]:
-            if col in r.index:
-                raw = r.get(col, "")
-
-                if is_fake_rsc_token(raw):
-                    continue
-
-                txt = safe_text(raw)
-
-                if txt:
-                    lyrics_candidates.append(txt)
-
-        lyrics_text = "\n\n".join(lyrics_candidates)
-
-        raw_outlier = r.get("is_outlier", False)
-        is_outlier = False if pd.isna(raw_outlier) else bool(raw_outlier)
-
-        songs.append({
-            "rank": int(safe_float_or_none(r.get("rank", 0)) or 0),
-            "rank_change": safe_float_or_none(r.get("rank_change", None)),
-            "rank_status": safe_text(r.get("rank_status", "")),
-            "previous_rank": safe_int_or_none(r.get("previous_rank", None)),
-            "current_rank_saved": safe_int_or_none(r.get("current_rank", None)),
-
-            "id": safe_text(r.get("id", "")),
-            "title": safe_text(r.get("title", "Untitled")) or "Untitled",
-            "creator": display_name,
-            "handle": handle_text,
-            "created_at": created_txt,
-            "style_tags": safe_text(r.get("display_tags", "")),
-
-            "play_count": int(safe_float_or_none(r.get("play_count", 0)) or 0),
-            "upvote_count": int(safe_float_or_none(r.get("upvote_count", 0)) or 0),
-            "comment_count": int(safe_float_or_none(r.get("comment_count", 0)) or 0),
-            "effective_comment_count": safe_float_or_none(r.get("effective_comment_count", r.get("comment_count", 0))) or 0,
-            "adjusted_comment_count": safe_float_or_none(r.get("adjusted_comment_count", r.get("comment_count", 0))) or 0,
-            "comment_quality_ratio": safe_float_or_none(r.get("comment_quality_ratio", 1)) or 1,
-
-            "is_outlier": is_outlier,
-            "outlier_reasons": safe_text(r.get("outlier_reasons", "")),
-
-            "song_url": safe_url(r.get("song_url", "")),
-            "audio_url": safe_url(r.get("audio_url", "")),
-            "image_url": safe_url(r.get("image_url", "")),
-            "integrated_lufs": safe_float_or_none(r.get("integrated_lufs", None)),
-            "true_peak_db": safe_float_or_none(r.get("true_peak_db", None)),
-            "loudness_gain_db": safe_float_or_none(r.get("loudness_gain_db", None)),
-            "loudness_target_lufs": safe_float_or_none(r.get("loudness_target_lufs", -14.0)) or -14.0,
-            "loudness_true_peak_ceiling_db": safe_float_or_none(r.get("loudness_true_peak_ceiling_db", -1.0)) or -1.0,
-            "loudness_status": safe_text(r.get("loudness_status", "")),
-            "lyrics": lyrics_text,
-
-            "trend_score": safe_float_or_none(r.get("trend_score", 0)) or 0,
-            "base_score": safe_float_or_none(r.get("base_score", 0)) or 0,
-            "growth_score": safe_float_or_none(r.get("growth_score", 0)) or 0,
-            "freshness_score": safe_float_or_none(r.get("freshness_score", 0)) or 0,
-            "growth_score_raw": safe_float_or_none(r.get("growth_score_raw", 0)) or 0,
-            "play_delta_window": safe_float_or_none(r.get("play_delta_window", 0)) or 0,
-            "upvote_delta_window": safe_float_or_none(r.get("upvote_delta_window", 0)) or 0,
-            "comment_delta_window": safe_float_or_none(r.get("comment_delta_window", 0)) or 0,
-            "freshness": safe_float_or_none(r.get("freshness", 0)) or 0,
-            "age_hours": safe_float_or_none(r.get("age_hours", 0)) or 0,
-        })
-
-    return songs
-
-
-def build_history_payload(hist, song_ids):
-    if hist is None or hist.empty:
-        return {}
-
-    if "id" not in hist.columns or "checked_at" not in hist.columns:
-        return {}
-
-    h = hist.copy()
-    h["id"] = h["id"].astype(str)
-
-    song_id_set = set(str(x) for x in song_ids)
-    h = h[h["id"].isin(song_id_set)].copy()
-
-    if h.empty:
-        return {}
-
-    h = h.sort_values("checked_at")
-
-    result = {}
-
-    for song_id, g in h.groupby("id"):
-        rows = []
-        g = g.tail(80)
-
-        for _, r in g.iterrows():
-            checked_at = r.get("checked_at")
-
-            if pd.notna(checked_at):
-                checked_txt = checked_at.strftime("%m-%d %H:%M")
-            else:
-                checked_txt = "-"
-
-            rows.append({
-                "checked_at": checked_txt,
-                "play_count": int(float(r.get("play_count", 0) or 0)),
-                "upvote_count": int(float(r.get("upvote_count", 0) or 0)),
-                "comment_count": int(float(r.get("comment_count", 0) or 0)),
-            })
-
-        result[str(song_id)] = rows
-
-    return result
-
-
-# ================================
-# Player + ranking component
-# ================================
-
-def render_player_ranking(df, hist):
-    songs = build_song_payload(df)
-    histories = build_history_payload(hist, [s["id"] for s in songs])
-
-    songs_json = json.dumps(songs, ensure_ascii=False).replace("</", "<\\/")
-    histories_json = json.dumps(histories, ensure_ascii=False).replace("</", "<\\/")
-
-    return render_player_ranking_html(
-        songs_json,
-        histories_json,
-        ranking_config_json(),
-        title="Top 200",
-        subtitle="최근 4일 이내 곡 중 trend_score 상위 200",
-    )
-
-
-def render_manual_song_form():
-    st.markdown("### 수동 곡 추가")
-
-    with st.container(border=True):
-        with st.form("manual_add_song_form", clear_on_submit=True):
-            manual_suno_url = st.text_input(
-                "Suno song link",
-                placeholder="https://suno.com/song/... 또는 https://suno.com/s/...",
-                label_visibility="collapsed",
-            )
-
-            submit_col1, submit_col2 = st.columns([0.28, 0.72])
-
-            with submit_col1:
-                submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
-
-            with submit_col2:
-                st.caption("지원 링크: /song/... 또는 /s/...")
-
+    ensure_profile()
+    st.caption(f"현재 프로토타입은 MP3 최대 {MAX_AUDIO_MB}MB, 앨범 이미지는 JPG/PNG/WEBP 최대 {MAX_COVER_MB}MB만 지원합니다.")
+    with st.form("upload_form"):
+        title = st.text_input("노래 제목 *", max_chars=160)
+        style_tags = st.text_input("스타일태그 / 장르", placeholder="예: hard psy, vocal chop, synth-pop", max_chars=300)
+        description = st.text_area("곡 소개", max_chars=2000)
+        lyrics = st.text_area("가사", height=180, max_chars=20000)
+        audio = st.file_uploader("음원 파일 *", type=["mp3"])
+        cover = st.file_uploader("앨범 이미지 *", type=["jpg", "jpeg", "png", "webp"])
+        comments_enabled = st.checkbox("댓글 허용", value=True)
+        rights = st.checkbox("나는 이 음원을 업로드하고 공개/공유/재생할 권리를 보유하고 있거나 필요한 허가를 받았으며, 제3자의 권리 및 외부 플랫폼 약관을 침해하지 않음을 확인합니다.")
+        submitted = st.form_submit_button("곡 등록")
         if submitted:
-            ok, msg = is_valid_suno_link(manual_suno_url)
-
-            if not ok:
-                st.warning(msg)
+            if not rights:
+                st.error("권리 확인 동의가 필요합니다.")
+            elif has_bad_words(title + style_tags + description):
+                st.error("입력 내용에 제한된 표현이 포함되어 있습니다.")
             else:
-                ok, msg = queue_manual_song_url(manual_suno_url)
-
-                if ok:
-                    st.success(msg)
-                else:
-                    st.error(msg)
+                song_id = create_song(title, style_tags, lyrics, audio, cover, comments_enabled, description)
+                if song_id:
+                    st.success("곡이 등록되었습니다. 차트에 즉시 반영됩니다.")
+                    st.session_state["selected_song_id"] = song_id
 
 
+def render_manage_page():
+    st.markdown("<div class='busy-section-title'>업로드곡 관리</div>", unsafe_allow_html=True)
+    if not is_logged_in():
+        st.info("로그인이 필요합니다.")
+        return
+    songs = list_my_songs()
+    if st.button("+ 새 곡 업로드 페이지로 이동"):
+        st.session_state["busy_nav"] = "Upload"
+        rerun()
+    if not songs:
+        st.info("아직 업로드한 곡이 없습니다.")
+        return
+    for song in songs:
+        with st.expander(f"{song.get('title')} · {song.get('visibility')} · {song.get('status')}"):
+            left, right = st.columns([1, 2])
+            with left:
+                if song.get("cover_url"):
+                    st.image(song.get("cover_url"), use_container_width=True)
+                st.caption(f"▶ {song.get('play_count',0)} · ♥ {song.get('like_count',0)} · 💬 {song.get('comment_count',0)}")
+            with right:
+                with st.form(f"edit_{song.get('id')}"):
+                    title = st.text_input("제목", value=song.get("title") or "", key=f"title_{song.get('id')}")
+                    style_tags = st.text_input("스타일태그", value=song.get("style_tags") or "", key=f"tags_{song.get('id')}")
+                    description = st.text_area("곡 소개", value=song.get("description") or "", key=f"desc_{song.get('id')}")
+                    lyrics = st.text_area("가사", value=song.get("lyrics") or "", height=120, key=f"lyrics_{song.get('id')}")
+                    comments_enabled = st.checkbox("댓글 허용", value=bool(song.get("comments_enabled", True)), key=f"ce_{song.get('id')}")
+                    visibility = st.selectbox("공개 상태", ["public", "private"], index=0 if song.get("visibility") == "public" else 1, key=f"vis_{song.get('id')}")
+                    new_cover = st.file_uploader("앨범 이미지 교체", type=["jpg", "jpeg", "png", "webp"], key=f"cover_{song.get('id')}")
+                    new_audio = st.file_uploader("음원 교체", type=["mp3"], key=f"audio_{song.get('id')}")
+                    save = st.form_submit_button("수정 저장")
+                    if save:
+                        ok = update_song(str(song.get("id")), {
+                            "title": title,
+                            "style_tags": style_tags,
+                            "description": description,
+                            "lyrics": lyrics,
+                            "comments_enabled": comments_enabled,
+                            "visibility": visibility,
+                            "status": "active",
+                        }, new_cover_file=new_cover, new_audio_file=new_audio)
+                        if ok:
+                            st.success("수정되었습니다.")
+                            rerun()
+                if st.button("삭제", key=f"delete_{song.get('id')}", type="secondary"):
+                    if delete_song(str(song.get("id"))):
+                        st.success("삭제 처리되었습니다.")
+                        rerun()
 
 
-def build_cloud_playlist_config():
-    """Browser-safe config for JS-only cloud playlist controls.
+def render_nav():
+    public_tabs = ["Chart"]
+    private_tabs = ["Profile", "Upload", "Manage"] if is_logged_in() else []
+    tabs = public_tabs + private_tabs
+    current = st.session_state.get("busy_nav", "Chart")
+    if current not in tabs:
+        current = "Chart"
+    selected = st.radio("Navigation", tabs, index=tabs.index(current), horizontal=True, label_visibility="collapsed")
+    st.session_state["busy_nav"] = selected
+    return selected
 
-    Full JS player controls are shown only after login. Cloud save/load/delete uses
-    SUPABASE_ANON_KEY + SECURITY DEFINER RPC functions from
-    supabase/playlist_rpc.sql, avoiding Streamlit reruns while audio is playing.
-    """
-    logged_in = is_logged_in()
 
-    if not logged_in:
-        return {
-            "enabled": False,
-            "playerEnabled": False,
-            "message": "로그인 후 Cloud Playlist를 사용할 수 있습니다.",
-        }
+def main():
+    inject_css()
+    render_header()
+    if not is_supabase_ready():
+        st.error("Supabase 연결이 필요합니다. Streamlit Secrets에 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY를 설정하고, supabase/busy_chart_v1_schema.sql을 실행하세요.")
+        return
+    nav = render_nav()
+    if nav == "Chart":
+        render_chart()
+    elif nav == "Profile":
+        render_profile_page()
+    elif nav == "Upload":
+        render_upload_page()
+    elif nav == "Manage":
+        render_manage_page()
+    err = st.session_state.get("busy_last_error")
+    if err:
+        with st.expander("최근 서버 메시지", expanded=False):
+            st.code(str(err)[:2000])
 
-    if not is_supabase_configured():
-        return {
-            "enabled": False,
-            "playerEnabled": True,
-            "message": "서버 설정을 확인해야 합니다.",
-        }
 
-    public_cfg = get_supabase_public_config()
-    token = ensure_playlist_cloud_token()
-    if not public_cfg.get("supabase_url") or not public_cfg.get("supabase_anon_key"):
-        return {
-            "enabled": False,
-            "playerEnabled": True,
-            "message": "SUPABASE_ANON_KEY를 Streamlit Secrets에 추가해야 합니다.",
-        }
-    if not token:
-        err = st.session_state.get("supabase_last_error", "")
-        return {
-            "enabled": False,
-            "playerEnabled": True,
-            "message": "playlist_rpc.sql 적용이 필요합니다." + (f" ({err[:120]})" if err else ""),
-        }
-
-    return {
-        "enabled": True,
-        "playerEnabled": True,
-        "supabaseUrl": public_cfg["supabase_url"].rstrip("/"),
-        "anonKey": public_cfg["supabase_anon_key"],
-        "playlistToken": token,
-    }
-
-# ================================
-# Main
-# ================================
-
-st.title("Suno Chart v1.05")
-render_auth_status_bar()
-
-# Prefer Supabase app_payloads.latest. Keep the old encrypted ZIP payload as a fallback
-# during migration so the public app does not break if Supabase is empty/unavailable.
-payload_source = "supabase"
-payload, payload_error = load_supabase_app_payload("latest")
-
-if not payload:
-    payload_source = "zip_fallback"
-    try:
-        sync_remote_data_files(DATA_RAW_BASE_URL, GITHUB_RAW_TOKEN)
-    except Exception as e:
-        st.warning(f"Remote data sync failed. Using existing local data files. Error: {e}")
-
-    payload_fingerprint = file_fingerprint(APP_PAYLOAD_ZIP_PATH)
-    payload, payload_error = load_app_payload(payload_fingerprint)
-
-if payload:
-    meta = payload.get("meta", {})
-    tabs_payload = payload.get("tabs", {})
-
-    last_checked_txt = meta.get("last_checked_at", "-") or "-"
-    if payload_source == "supabase":
-        st.caption(f"마지막 업데이트 {last_checked_txt} · 데이터 소스: 서버")
-    else:
-        st.caption(f"마지막 업데이트 {last_checked_txt} · 데이터 소스: ZIP fallback")
-    st.divider()
-
-    tabs_order = payload.get("tabs_order") or ["new_songs", "top200", "rain_crew"]
-    tabs_order = [key for key in tabs_order if key in tabs_payload]
-
-    if not tabs_order:
-        st.info("표시할 탭 payload가 없습니다.")
-    else:
-        cloud_config = build_cloud_playlist_config()
-
-        # 플레이어와 차트를 하나의 HTML 컴포넌트 안에서 관리한다.
-        # Streamlit radio/st.tabs로 차트를 바꾸면 전체 컴포넌트가 재마운트되어 <audio>가 끊기므로,
-        # 탭 전환은 JS 내부에서 처리하고 왼쪽 플레이어 프레임은 그대로 유지한다.
-        render_player_ranking_payload_tabs(
-            tabs_payload,
-            tabs_order=tabs_order,
-            default_key="top200" if "top200" in tabs_order else tabs_order[0],
-            cloud_config=cloud_config,
-        )
-
-    render_manual_song_form()
-    st.stop()
-
-if payload_error:
-    st.warning(payload_error)
-
-# Payload가 아직 만들어지지 않은 첫 실행을 위한 기존 계산 fallback.
-db_fingerprint = file_fingerprint(DB_ZIP_PATH)
-history_fingerprint = file_fingerprint(HISTORY_ZIP_PATH)
-
-raw_db, raw_hist, error = load_encrypted_data(
-    db_fingerprint,
-    history_fingerprint,
-)
-
-if error:
-    st.error(error)
-    st.stop()
-
-if raw_db is None or raw_db.empty:
-    st.warning("DB가 비어 있습니다. GitHub Actions가 신규곡을 수집한 뒤 다시 확인하세요.")
-    st.stop()
-
-raw_db = restore_created_at_from_history_df(raw_db, raw_hist)
-db = prepare_db(raw_db)
-hist = prepare_history(raw_hist)
-
-scored = score_songs(
-    db=db,
-    hist=hist,
-    play_weight=PLAY_WEIGHT,
-    like_weight=LIKE_WEIGHT,
-    comment_weight=COMMENT_WEIGHT,
-    growth_weight=GROWTH_WEIGHT,
-    freshness_weight=FRESHNESS_WEIGHT,
-    growth_window_hours=GROWTH_WINDOW_HOURS,
-    freshness_power=FRESHNESS_POWER,
-)
-
-active = filter_view(scored)
-active = add_outlier_flags(active, sigma=OUTLIER_SIGMA, use_log=OUTLIER_USE_LOG)
-
-new_view = active.sort_values("created_at", ascending=False, na_position="last").head(TOP_N).copy()
-new_view = new_view.reset_index(drop=True)
-new_view.insert(0, "rank", range(1, len(new_view) + 1))
-
-top_view = active.sort_values("trend_score", ascending=False, na_position="last").head(TOP_N).copy()
-top_view = top_view.reset_index(drop=True)
-top_view.insert(0, "rank", range(1, len(top_view) + 1))
-
-total_songs = len(db)
-last_checked = db["last_checked_at"].max() if "last_checked_at" in db.columns else pd.NaT
-newest_created = db["created_at"].max() if "created_at" in db.columns else pd.NaT
-
-latest_created_txt = newest_created.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(newest_created) else "-"
-last_checked_txt = last_checked.strftime("%Y-%m-%d %H:%M UTC") if pd.notna(last_checked) else "-"
-
-st.info("현재는 app payload가 없어 기존 계산 fallback으로 표시 중입니다. GitHub Actions가 한 번 실행되면 빨라집니다.")
-st.caption(f"마지막 업데이트 {last_checked_txt}")
-st.divider()
-
-new_songs_payload = build_song_payload(new_view)
-new_songs_histories = build_history_payload(hist, [song["id"] for song in new_songs_payload])
-
-top200_payload = build_song_payload(top_view)
-top200_histories = build_history_payload(hist, [song["id"] for song in top200_payload])
-
-fallback_tabs = {
-    "new_songs": {
-        "title": "New Song",
-        "description": "생성일 기준 최신순",
-        "songs": new_songs_payload,
-        "histories": new_songs_histories,
-    },
-    "top200": {
-        "title": "Top 200",
-        "description": "최근 4일 이내 곡 중 trend_score 상위 200",
-        "songs": top200_payload,
-        "histories": top200_histories,
-    },
-    "rain_crew": {
-        "title": "☔rain crew",
-        "description": "☔rain crew 멤버 곡 최신순",
-        "songs": [],
-        "histories": {},
-    },
-}
-
-fallback_cloud_config = build_cloud_playlist_config()
-
-# fallback에서도 Streamlit radio 대신 HTML 내부 탭을 사용해서
-# 차트를 바꿀 때 플레이어가 재마운트되지 않도록 한다.
-render_player_ranking_payload_tabs(
-    fallback_tabs,
-    tabs_order=["new_songs", "top200", "rain_crew"],
-    default_key="top200",
-    cloud_config=fallback_cloud_config,
-)
-
-render_manual_song_form()
+if __name__ == "__main__":
+    main()
