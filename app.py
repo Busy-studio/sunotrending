@@ -846,10 +846,9 @@ def render_player_ranking(df, hist):
 
 
 def render_manual_song_form():
-    # 모바일에서 차트 영역을 밀어내지 않도록 수동 곡 추가는 기본 접힘 상태로 둔다.
-    with st.expander("수동 곡 추가", expanded=False):
-        st.caption("Suno 링크를 넣으면 다음 업데이트에서 수집 대기열에 추가됩니다.")
+    st.markdown("### 수동 곡 추가")
 
+    with st.container(border=True):
         with st.form("manual_add_song_form", clear_on_submit=True):
             manual_suno_url = st.text_input(
                 "Suno song link",
@@ -857,8 +856,13 @@ def render_manual_song_form():
                 label_visibility="collapsed",
             )
 
-            submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
-            st.caption("지원 링크: /song/... 또는 /s/...")
+            submit_col1, submit_col2 = st.columns([0.28, 0.72])
+
+            with submit_col1:
+                submitted = st.form_submit_button("곡정보수집 요청", use_container_width=True)
+
+            with submit_col2:
+                st.caption("지원 링크: /song/... 또는 /s/...")
 
         if submitted:
             ok, msg = is_valid_suno_link(manual_suno_url)

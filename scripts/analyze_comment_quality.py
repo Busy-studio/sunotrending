@@ -415,6 +415,57 @@ def analyze_comment_rows(comment_rows, original_comment_count):
     }
 
 
+
+def get_comment_db_client():
+    try:
+        from comment_db_io import get_client
+        return get_client()
+    except Exception as exc:
+        print(f"[comment_db] unavailable: {exc}")
+        return None
+
+
+def should_fetch_comments(song_id, comment_count, sb=None):
+    """Fetch comments only when the song has comments not yet represented in suno_comments."""
+    if comment_count <= 0:
+        return False
+    if not sb:
+        return True
+    try:
+        from comment_db_io import count_song_comments
+        stored_count = count_song_comments(sb, song_id)
+        return stored_count < comment_count
+    except Exception as exc:
+        print(f"[comment_db] count failed {song_id}: {exc}")
+        return True
+
+
+def analyze_and_mark_unanalyzed(sb, song_ids, max_rows=2000):
+    """Classify only comments with analyzed_at is null, then mark those rows analyzed."""
+    from comment_db_io import fetch_unanalyzed_comments, mark_comments_analyzed
+
+    rows = fetch_unanalyzed_comments(sb, song_ids=song_ids, limit=max_rows)
+    if not rows:
+        return 0
+
+    analyzed_rows = []
+    for row in rows:
+        label, weight = classify_comment(row)
+        analyzed_rows.append({
+            "comment_id": row.get("comment_id"),
+            "quality_label": label,
+            "quality_weight": weight,
+            "is_meaningful": "true" if label.startswith("meaningful") else "false",
+            "is_generic": "true" if not label.startswith("meaningful") and label not in {"mention_only", "emoji_only", "repeated"} else "false",
+            "is_mention_only": "true" if label == "mention_only" else "false",
+            "is_emoji_only": "true" if label in {"emoji_only", "repeated"} else "false",
+        })
+
+    marked = mark_comments_analyzed(sb, analyzed_rows)
+    print(f"[comment_db] analyzed_new_comments={marked}")
+    return marked
+
+
 def main():
     ensure_data_files()
 
@@ -425,11 +476,16 @@ def main():
     print(f"[load] hist_rows={len(hist)}")
 
     top = score_for_top200(db, hist)
-
     print(f"[top] analyze_target_rows={len(top)}")
 
-    existing_quality = pd.DataFrame()
+    sb = get_comment_db_client()
+    use_comment_db = bool(sb) and os.getenv("COMMENT_DB_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    if use_comment_db:
+        print("[comment_db] enabled: store raw comments and analyze only new comments")
+    else:
+        print("[comment_db] disabled/fallback: legacy full per-song analysis")
 
+    existing_quality = pd.DataFrame()
     if os.path.exists(QUALITY_PATH):
         try:
             existing_quality = pd.read_csv(QUALITY_PATH)
@@ -441,6 +497,7 @@ def main():
             existing_quality = pd.DataFrame()
 
     quality_rows = []
+    touched_song_ids = []
 
     for idx, row in top.iterrows():
         song_id = safe_str(row.get("id"))
@@ -468,21 +525,55 @@ def main():
             quality_rows.append(result)
             continue
 
-        payload = fetch_comments(song_id)
-        comment_rows = flatten_comments(payload)
+        if use_comment_db:
+            from comment_db_io import upsert_comments, summarize_song_quality, count_song_comments
 
-        analysis = analyze_comment_rows(comment_rows, comment_count)
+            stored_before = count_song_comments(sb, song_id)
+            fetched_new = 0
+            api_total = stored_before
 
-        result = {
-            "id": song_id,
-            "comment_count": comment_count,
-            "api_total_count": payload.get("total_count", len(comment_rows)),
-            **analysis,
-            "checked_at": utc_now_iso(),
-        }
+            if should_fetch_comments(song_id, comment_count, sb=sb):
+                payload = fetch_comments(song_id)
+                comment_rows = flatten_comments(payload)
+                fetched_new = upsert_comments(sb, song_id, comment_rows)
+                api_total = payload.get("total_count", len(comment_rows))
+                if fetched_new:
+                    touched_song_ids.append(song_id)
+                print(
+                    f"[comment_fetch] {song_id} comment_count={comment_count} "
+                    f"stored_before={stored_before} fetched_new={fetched_new} api_total={api_total}"
+                )
+                time.sleep(REQUEST_SLEEP_SECONDS)
+            else:
+                print(f"[comment_skip] {song_id} comment_count={comment_count} stored={stored_before} no_new_comments")
+
+            # Analyze only comments with analyzed_at is null for this song.
+            analyzed_new = analyze_and_mark_unanalyzed(sb, [song_id], max_rows=COMMENT_MAX_ITEMS_PER_SONG * 2)
+            if analyzed_new:
+                touched_song_ids.append(song_id)
+
+            analysis = summarize_song_quality(sb, song_id, comment_count)
+            result = {
+                "id": song_id,
+                "comment_count": comment_count,
+                "api_total_count": api_total,
+                **analysis,
+                "checked_at": utc_now_iso(),
+            }
+        else:
+            payload = fetch_comments(song_id)
+            comment_rows = flatten_comments(payload)
+            analysis = analyze_comment_rows(comment_rows, comment_count)
+            result = {
+                "id": song_id,
+                "comment_count": comment_count,
+                "api_total_count": payload.get("total_count", len(comment_rows)),
+                **analysis,
+                "checked_at": utc_now_iso(),
+            }
+            time.sleep(REQUEST_SLEEP_SECONDS)
 
         quality_rows.append(result)
-
         print(
             f"[quality] {song_id} comments={comment_count} "
             f"analyzed={result['analyzed_comment_count']} "
@@ -491,21 +582,25 @@ def main():
             f"summary={result['comment_quality_summary']}"
         )
 
-        time.sleep(REQUEST_SLEEP_SECONDS)
-
     quality_new = pd.DataFrame(quality_rows)
 
-    if not existing_quality.empty and "id" in existing_quality.columns:
+    if not existing_quality.empty and "id" in existing_quality.columns and not quality_new.empty:
         old_rest = existing_quality[~existing_quality["id"].isin(quality_new["id"])].copy()
         quality_final = pd.concat([quality_new, old_rest], ignore_index=True)
-    else:
+    elif not quality_new.empty:
         quality_final = quality_new
+    else:
+        quality_final = existing_quality
 
-    quality_final = normalize_text_columns(quality_final, columns=["title", "handle", "comment_quality_summary"])
+    if not quality_final.empty:
+        quality_final = normalize_text_columns(quality_final, columns=["title", "handle", "comment_quality_summary"])
     quality_final.to_csv(QUALITY_PATH, index=False, encoding="utf-8-sig")
 
-    check_quality = pd.read_csv(QUALITY_PATH)
-    print(f"[save] quality_rows={len(check_quality)} -> {QUALITY_PATH}")
+    try:
+        check_quality = pd.read_csv(QUALITY_PATH)
+        print(f"[save] quality_rows={len(check_quality)} -> {QUALITY_PATH}")
+    except Exception:
+        print(f"[save] quality saved -> {QUALITY_PATH}")
 
     if not quality_new.empty:
         merge_cols = [
@@ -520,13 +615,8 @@ def main():
             "comment_quality_summary",
             "checked_at",
         ]
-
         update_quality = quality_new[merge_cols].copy()
-
-        rename_map = {
-            "checked_at": "comment_quality_checked_at",
-        }
-        update_quality = update_quality.rename(columns=rename_map)
+        update_quality = update_quality.rename(columns={"checked_at": "comment_quality_checked_at"})
 
         db = db.drop(
             columns=[
@@ -544,7 +634,6 @@ def main():
         )
 
         db = db.merge(update_quality, on="id", how="left")
-
         db = normalize_text_columns(db)
         db.to_csv(DB_PATH, index=False, encoding="utf-8-sig")
 

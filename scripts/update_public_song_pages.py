@@ -34,6 +34,17 @@ MAX_UPDATE_ROWS = int(os.getenv("MAX_UPDATE_ROWS", "1000"))
 FETCH_NEW_SONGS = os.getenv("FETCH_NEW_SONGS", "1").strip().lower() not in {"0", "false", "no", "off"}
 KEEP_EXPIRED_SONGS_IN_DB = os.getenv("KEEP_EXPIRED_SONGS_IN_DB", "0").strip().lower() in {"1", "true", "yes", "on"}
 
+# Supabase 누적 운영 최적화: 전체 곡은 보관하되 fetch 대상은 tier/next_check_at로 제한한다.
+UPDATE_TIERING_ENABLED = os.getenv("UPDATE_TIERING_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+HOT_REFRESH_HOURS = float(os.getenv("HOT_REFRESH_HOURS", "0"))
+PLAYLIST_REFRESH_HOURS = float(os.getenv("PLAYLIST_REFRESH_HOURS", "24"))
+WARM_REFRESH_HOURS = float(os.getenv("WARM_REFRESH_HOURS", "6"))
+COLD_REFRESH_HOURS = float(os.getenv("COLD_REFRESH_HOURS", "72"))
+FROZEN_REFRESH_HOURS = float(os.getenv("FROZEN_REFRESH_HOURS", "168"))
+FETCH_FAIL_FREEZE_THRESHOLD = int(os.getenv("FETCH_FAIL_FREEZE_THRESHOLD", "10"))
+FETCH_FAIL_BACKOFF_THRESHOLD = int(os.getenv("FETCH_FAIL_BACKOFF_THRESHOLD", "3"))
+RAIN_CREW_HANDLES = {h.strip().lower().lstrip("@") for h in os.getenv("RAIN_CREW_HANDLES", "busystudio,gaaia,stone3ah,joonoc,eve_rain,djjobs,katarina_blu,katarina_suno,jenapop,n_dal,shout4all,suzushie").split(",") if h.strip()}
+
 # 무로그인 new_songs는 page_size 50까지 가능, 100은 서버가 거절함
 NEW_SONGS_PAGES = int(os.getenv("NEW_SONGS_PAGES", "3"))
 NEW_SONGS_PAGE_SIZE = int(os.getenv("NEW_SONGS_PAGE_SIZE", "50"))
@@ -485,7 +496,33 @@ def flatten_song(song, old_row=None, source="public"):
         "emoji_only_count": get_old_value(old_row, "emoji_only_count"),
         "comment_quality_summary": get_old_value(old_row, "comment_quality_summary"),
         "comment_quality_checked_at": get_old_value(old_row, "comment_quality_checked_at"),
+
+        # Supabase 누적 운영 메타데이터
+        "status": "active",
+        "update_tier": get_old_value(old_row, "update_tier"),
+        "next_check_at": get_old_value(old_row, "next_check_at"),
+        "fetch_fail_count": 0,
+        "last_fetch_error": "",
+        "last_change_at": get_old_value(old_row, "last_change_at"),
+        "playlist_ref_count": get_old_value(old_row, "playlist_ref_count"),
+        "comments_fetch_needed": get_old_value(old_row, "comments_fetch_needed"),
+        "last_comment_fetch_at": get_old_value(old_row, "last_comment_fetch_at"),
     }
+
+    # 변화 감지: 수치가 바뀌었으면 last_change_at 갱신, 댓글 수 증가 시 댓글 수집 후보 표시
+    try:
+        old_play = float(get_old_value(old_row, "play_count", 0) or 0)
+        old_like = float(get_old_value(old_row, "upvote_count", 0) or 0)
+        old_comment = float(get_old_value(old_row, "comment_count", 0) or 0)
+        new_play = float(row.get("play_count") or 0)
+        new_like = float(row.get("upvote_count") or 0)
+        new_comment = float(row.get("comment_count") or 0)
+        if new_play != old_play or new_like != old_like or new_comment != old_comment:
+            row["last_change_at"] = now_txt
+        if new_comment > old_comment:
+            row["comments_fetch_needed"] = "1"
+    except Exception:
+        pass
 
     return normalize_record_text(row)
 
@@ -704,20 +741,101 @@ def add_new_songs_to_db(db, songs):
     return db, len(new_rows), duplicate_count
 
 
+
+def utc_timestamp():
+    return pd.Timestamp.now(tz="UTC")
+
+
+def normalize_handle_for_tier(value):
+    return str(value or "").strip().lower().lstrip("@")
+
+
+def get_playlist_referenced_ids():
+    """Return song IDs referenced by Cloud Playlists.
+
+    This uses Supabase directly when available. If Supabase is unavailable, it
+    safely returns an empty set so the update pipeline can still run.
+    """
+    try:
+        from supabase_raw_io import get_client, _fetch_all
+        sb = get_client()
+        rows = _fetch_all(sb, "playlist_items")
+        return {str(row.get("song_id")) for row in rows if row.get("song_id")}
+    except Exception as exc:
+        print(f"[playlist_refs] skipped: {exc}")
+        return set()
+
+
+def compute_update_tier(row, now=None, playlist_ids=None):
+    now = now or utc_timestamp()
+    playlist_ids = playlist_ids or set()
+    song_id = str(row.get("id") or "")
+    status = str(row.get("status") or "").strip().lower()
+    fail_count = pd.to_numeric(pd.Series([row.get("fetch_fail_count")]), errors="coerce").fillna(0).iloc[0]
+
+    if status in {"frozen", "deleted", "unavailable", "private"} or int(fail_count) >= FETCH_FAIL_FREEZE_THRESHOLD:
+        return "frozen"
+
+    created_at = pd.to_datetime(row.get("created_at"), errors="coerce", utc=True)
+    if pd.isna(created_at):
+        return "hot"
+
+    if created_at >= now - pd.Timedelta(days=SONG_RETENTION_DAYS):
+        return "hot"
+
+    if song_id in playlist_ids:
+        return "playlist"
+
+    handle = normalize_handle_for_tier(row.get("handle"))
+    if handle in RAIN_CREW_HANDLES:
+        return "warm"
+
+    return "cold"
+
+
+def tier_refresh_hours(tier):
+    return {
+        "hot": HOT_REFRESH_HOURS,
+        "playlist": PLAYLIST_REFRESH_HOURS,
+        "warm": WARM_REFRESH_HOURS,
+        "cold": COLD_REFRESH_HOURS,
+        "frozen": FROZEN_REFRESH_HOURS,
+    }.get(str(tier or "cold"), COLD_REFRESH_HOURS)
+
+
+def is_due_for_tier(row, tier, now=None):
+    now = now or utc_timestamp()
+    if not UPDATE_TIERING_ENABLED:
+        return True
+
+    next_check = pd.to_datetime(row.get("next_check_at"), errors="coerce", utc=True)
+    if pd.notna(next_check):
+        return next_check <= now
+
+    last_checked = pd.to_datetime(row.get("last_checked_at"), errors="coerce", utc=True)
+    hours = tier_refresh_hours(tier)
+    if pd.isna(last_checked):
+        # Missing last_checked active/hot rows should be refreshed quickly. Old cold rows can wait.
+        return tier in {"hot", "playlist", "warm"}
+    return last_checked <= now - pd.Timedelta(hours=hours)
+
+
 def choose_rows_to_update(db):
-    """Pick rows for detail refresh using rotation, not only newest-created rows.
+    """Pick rows for detail refresh using tiering + next_check_at.
 
-    Priority:
-    1. rows missing created_at, because they may be excluded from ranking otherwise
-    2. rows with missing/old last_checked_at
-    3. newer created_at as tie breaker
-
-    This prevents older-but-still-eligible songs from being starved by the newest rows.
+    Storage remains append/keep-all in suno_songs. Fetching is limited by:
+    - hot: 4-day ranking candidates or missing created_at
+    - playlist: old songs referenced by user playlists
+    - warm: Rain Crew/important handles
+    - cold: old unreferenced songs, low frequency
+    - frozen: repeated failures/deleted/private, very low frequency
     """
     if db.empty:
         return db
 
     out = db.copy()
+    now = utc_timestamp()
+    playlist_ids = get_playlist_referenced_ids() if UPDATE_TIERING_ENABLED else set()
 
     if "created_at" in out.columns:
         out["created_at_dt"] = pd.to_datetime(out["created_at"], errors="coerce", utc=True)
@@ -729,27 +847,39 @@ def choose_rows_to_update(db):
     else:
         out["last_checked_at_dt"] = pd.NaT
 
+    if "next_check_at" in out.columns:
+        out["next_check_at_dt"] = pd.to_datetime(out["next_check_at"], errors="coerce", utc=True)
+    else:
+        out["next_check_at_dt"] = pd.NaT
+
+    out["computed_update_tier"] = out.apply(lambda r: compute_update_tier(r, now=now, playlist_ids=playlist_ids), axis=1)
+    out["is_due"] = out.apply(lambda r: is_due_for_tier(r, r.get("computed_update_tier"), now=now), axis=1)
+
+    tier_priority = {"hot": 0, "playlist": 1, "warm": 2, "cold": 3, "frozen": 4}
+    out["tier_priority"] = out["computed_update_tier"].map(tier_priority).fillna(9).astype(int)
     out["missing_created_priority"] = out["created_at_dt"].isna().astype(int)
     out["missing_checked_priority"] = out["last_checked_at_dt"].isna().astype(int)
 
-    # Older last_checked_at should be refreshed first. Missing checked rows are sorted first by priority.
-    out = out.sort_values(
-        by=["missing_created_priority", "missing_checked_priority", "last_checked_at_dt", "created_at_dt"],
-        ascending=[False, False, True, False],
+    due = out[out["is_due"]].copy()
+
+    due = due.sort_values(
+        by=["tier_priority", "missing_created_priority", "missing_checked_priority", "last_checked_at_dt", "created_at_dt"],
+        ascending=[True, False, False, True, False],
         na_position="first",
     )
 
     print(
-        f"[choose_update] max={MAX_UPDATE_ROWS}, "
-        f"missing_created={int(out['created_at_dt'].isna().sum())}, "
-        f"missing_last_checked={int(out['last_checked_at_dt'].isna().sum())}, "
-        f"db_rows={len(out)}"
+        f"[choose_update] tiering={int(UPDATE_TIERING_ENABLED)} max={MAX_UPDATE_ROWS}, "
+        f"db_rows={len(out)}, due_rows={len(due)}, playlist_refs={len(playlist_ids)}, "
+        f"tiers={out['computed_update_tier'].value_counts(dropna=False).to_dict()}"
     )
 
-    return out.head(MAX_UPDATE_ROWS).drop(
+    selected = due.head(MAX_UPDATE_ROWS).copy()
+    return selected.drop(
         columns=[
-            "created_at_dt", "last_checked_at_dt",
+            "created_at_dt", "last_checked_at_dt", "next_check_at_dt",
             "missing_created_priority", "missing_checked_priority",
+            "tier_priority", "is_due",
         ],
         errors="ignore",
     ).copy()
@@ -1106,6 +1236,91 @@ def prune_old_songs_and_history(final_db):
     return active_db
 
 
+
+def compute_next_check_at(row, now=None):
+    now = now or utc_timestamp()
+    tier = row.get("update_tier") or row.get("computed_update_tier") or compute_update_tier(row, now=now)
+    hours = tier_refresh_hours(tier)
+
+    fail_count = pd.to_numeric(pd.Series([row.get("fetch_fail_count")]), errors="coerce").fillna(0).iloc[0]
+    if int(fail_count) >= FETCH_FAIL_BACKOFF_THRESHOLD and tier != "frozen":
+        hours = max(hours, 24)
+    if int(fail_count) >= FETCH_FAIL_FREEZE_THRESHOLD:
+        hours = FROZEN_REFRESH_HOURS
+
+    return (now + pd.Timedelta(hours=hours)).isoformat()
+
+
+def mark_fetch_failure(row, err):
+    failed = row.to_dict() if hasattr(row, "to_dict") else dict(row)
+    now_txt = now_iso()
+    try:
+        fail_count = int(float(failed.get("fetch_fail_count") or 0)) + 1
+    except Exception:
+        fail_count = 1
+
+    failed["last_checked_at"] = now_txt
+    failed["fetch_fail_count"] = fail_count
+    failed["last_fetch_error"] = str(err or "fetch_failed")[:500]
+
+    if fail_count >= FETCH_FAIL_FREEZE_THRESHOLD or any(x in str(err).lower() for x in ["404", "not found", "clip_not_found", "private", "deleted"]):
+        failed["status"] = "frozen"
+        failed["update_tier"] = "frozen"
+    else:
+        failed["status"] = failed.get("status") or "active"
+        failed["update_tier"] = failed.get("update_tier") or compute_update_tier(failed)
+
+    failed["next_check_at"] = compute_next_check_at(failed)
+    return normalize_record_text(failed)
+
+
+def apply_operational_tiering(final_db):
+    if final_db is None or final_db.empty:
+        return final_db
+    out = final_db.copy()
+    now = utc_timestamp()
+    playlist_ids = get_playlist_referenced_ids() if UPDATE_TIERING_ENABLED else set()
+
+    for col in ["status", "update_tier", "next_check_at", "fetch_fail_count", "last_fetch_error", "last_change_at", "playlist_ref_count", "comments_fetch_needed", "last_comment_fetch_at"]:
+        if col not in out.columns:
+            out[col] = ""
+
+    out["playlist_ref_count"] = out["id"].astype(str).apply(lambda sid: "1" if sid in playlist_ids else "0")
+    out["update_tier"] = out.apply(lambda r: compute_update_tier(r, now=now, playlist_ids=playlist_ids), axis=1)
+    blank_status = out["status"].astype(str).str.strip().isin(["", "nan", "None", "<NA>"])
+    out.loc[blank_status, "status"] = "active"
+
+    def fill_next(row):
+        existing = pd.to_datetime(row.get("next_check_at"), errors="coerce", utc=True)
+        if pd.notna(existing) and existing > now:
+            return row.get("next_check_at")
+        return compute_next_check_at(row, now=now)
+
+    out["next_check_at"] = out.apply(fill_next, axis=1)
+    return out
+
+
+def compact_history_if_needed(hist, high_res_days=None):
+    if os.getenv("COMPACT_HISTORY", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return hist
+    if hist is None or hist.empty or "checked_at" not in hist.columns or "id" not in hist.columns:
+        return hist
+    high_res_days = int(high_res_days or os.getenv("HISTORY_HIGH_RES_DAYS", "7"))
+    out = hist.copy()
+    out["checked_at_dt"] = pd.to_datetime(out["checked_at"], errors="coerce", utc=True)
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=high_res_days)
+    recent = out[out["checked_at_dt"].isna() | (out["checked_at_dt"] >= cutoff)].copy()
+    old = out[out["checked_at_dt"].notna() & (out["checked_at_dt"] < cutoff)].copy()
+    if old.empty:
+        return out.drop(columns=["checked_at_dt"], errors="ignore")
+    old["history_date"] = old["checked_at_dt"].dt.date.astype(str)
+    old = old.sort_values("checked_at_dt").drop_duplicates(subset=["id", "history_date"], keep="last")
+    combined = pd.concat([recent, old], ignore_index=True)
+    before = len(hist)
+    combined = combined.drop(columns=["checked_at_dt", "history_date"], errors="ignore")
+    print(f"[history_compact] before={before}, after={len(combined)}, high_res_days={high_res_days}")
+    return combined
+
 def detail_field_report(db):
     print("[detail_check] start")
 
@@ -1199,6 +1414,9 @@ def main():
             )
         else:
             failed += 1
+            failed_row = mark_fetch_failure(row, err)
+            updated_rows.append(failed_row)
+            updated_ids.add(song_id)
             print(f"[FAIL] {song_id}: {err}")
 
         time.sleep(REQUEST_SLEEP_SECONDS)
@@ -1239,6 +1457,8 @@ def main():
 
     print(f"[after_prune] db_rows={len(final_db)}")
 
+    final_db = apply_operational_tiering(final_db)
+
     text_changes = mojibake_report(final_db)
     if text_changes:
         print(f"[text_normalize] db_mojibake_fixed={text_changes}")
@@ -1264,6 +1484,7 @@ def main():
         kept_ids = set(final_db["id"].dropna().astype(str))
         hist["id"] = hist["id"].astype(str)
         hist = hist[hist["id"].isin(kept_ids)].copy()
+        hist = compact_history_if_needed(hist)
 
         hist.to_csv(HISTORY_PATH, index=False, encoding="utf-8-sig")
 
