@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
 
+from app_modules.busy_loudness import analyze_audio_loudness
+
 try:
     from supabase import create_client
 except Exception:
@@ -376,6 +378,11 @@ def create_song(title: str, style_tags: str, lyrics: str, audio_file, cover_file
         delete_storage_path(AUDIO_BUCKET, audio_path or "")
         st.error(f"앨범 이미지 업로드 실패: {cover_err}")
         return None
+    loudness = analyze_audio_loudness(audio_file)
+    try:
+        audio_file.seek(0)
+    except Exception:
+        pass
     now = now_iso()
     row = {
         "id": song_id,
@@ -397,6 +404,7 @@ def create_song(title: str, style_tags: str, lyrics: str, audio_file, cover_file
         "created_at": now,
         "updated_at": now,
         "trend_score": calculate_trend_score(0, 0, 0, now),
+        **loudness,
     }
     try:
         sb.table("bc_songs").insert(row).execute()
@@ -445,7 +453,12 @@ def update_song(song_id: str, fields: Dict[str, Any], new_cover_file=None, new_a
             st.error(f"음원 업로드 실패: {err}")
             return False
         delete_storage_path(AUDIO_BUCKET, song.get("audio_path") or "")
-        payload.update({"audio_path": path, "audio_url": url})
+        loudness = analyze_audio_loudness(new_audio_file)
+        try:
+            new_audio_file.seek(0)
+        except Exception:
+            pass
+        payload.update({"audio_path": path, "audio_url": url, **loudness})
     payload["updated_at"] = now_iso()
     try:
         sb.table("bc_songs").update(payload).eq("id", song_id).eq("uploader_user_id", uid).execute()
@@ -570,3 +583,108 @@ def toggle_comment_like(comment_id: str) -> Optional[bool]:
     except Exception as exc:
         st.session_state["busy_last_error"] = str(exc)
         return None
+
+
+# --- Busy Chart playlist helpers -------------------------------------------------
+
+def create_playlist(name: str, description: str = "", visibility: str = "public") -> Optional[str]:
+    sb = get_supabase_client()
+    uid = get_user_id()
+    if not sb or not uid:
+        st.error("로그인이 필요합니다.")
+        return None
+    name = clean_text(name, 120)
+    description = clean_text(description, 1000)
+    if not name:
+        st.error("플레이리스트 이름을 입력하세요.")
+        return None
+    if has_bad_words(name + description):
+        st.error("사용할 수 없는 표현이 포함되어 있습니다.")
+        return None
+    try:
+        row = {"owner_user_id": uid, "name": name, "description": description, "visibility": visibility, "created_at": now_iso(), "updated_at": now_iso()}
+        res = sb.table("bc_playlists").insert(row).execute()
+        return str((res.data or [{}])[0].get("id")) if res.data else None
+    except Exception as exc:
+        st.error(f"플레이리스트 생성 실패: {exc}")
+        return None
+
+
+def list_my_playlists() -> List[Dict[str, Any]]:
+    sb = get_supabase_client()
+    uid = get_user_id()
+    if not sb or not uid:
+        return []
+    try:
+        return sb.table("bc_playlists").select("*").eq("owner_user_id", uid).order("updated_at", desc=True).execute().data or []
+    except Exception:
+        return []
+
+
+def list_public_playlists(limit: int = 30) -> List[Dict[str, Any]]:
+    sb = get_supabase_client()
+    if not sb:
+        return []
+    try:
+        return sb.table("bc_playlists").select("*, bc_profiles(display_name, avatar_url)").eq("visibility", "public").eq("status", "active").order("updated_at", desc=True).limit(limit).execute().data or []
+    except Exception:
+        return []
+
+
+def add_song_to_playlist(playlist_id: str, song_id: str) -> bool:
+    sb = get_supabase_client()
+    uid = get_user_id()
+    if not sb or not uid:
+        st.error("로그인이 필요합니다.")
+        return False
+    try:
+        pl = sb.table("bc_playlists").select("id, owner_user_id").eq("id", playlist_id).limit(1).execute().data or []
+        if not pl or pl[0].get("owner_user_id") != uid:
+            st.error("플레이리스트 권한이 없습니다.")
+            return False
+        cnt = sb.table("bc_playlist_items").select("id", count="exact").eq("playlist_id", playlist_id).execute().count or 0
+        sb.table("bc_playlist_items").upsert({"playlist_id": playlist_id, "song_id": song_id, "position": int(cnt) + 1}, on_conflict="playlist_id,song_id").execute()
+        sb.table("bc_playlists").update({"updated_at": now_iso()}).eq("id", playlist_id).execute()
+        return True
+    except Exception as exc:
+        st.error(f"플레이리스트 추가 실패: {exc}")
+        return False
+
+
+def get_playlist_songs(playlist_id: str) -> List[Dict[str, Any]]:
+    sb = get_supabase_client()
+    if not sb:
+        return []
+    try:
+        rows = sb.table("bc_playlist_items").select("position, bc_songs(*, bc_profiles(display_name, avatar_url))").eq("playlist_id", playlist_id).order("position").execute().data or []
+        return [r.get("bc_songs") for r in rows if r.get("bc_songs")]
+    except Exception:
+        return []
+
+
+def remove_song_from_playlist(playlist_id: str, song_id: str) -> bool:
+    sb = get_supabase_client()
+    uid = get_user_id()
+    if not sb or not uid:
+        return False
+    try:
+        pl = sb.table("bc_playlists").select("id, owner_user_id").eq("id", playlist_id).limit(1).execute().data or []
+        if not pl or pl[0].get("owner_user_id") != uid:
+            return False
+        sb.table("bc_playlist_items").delete().eq("playlist_id", playlist_id).eq("song_id", song_id).execute()
+        sb.table("bc_playlists").update({"updated_at": now_iso()}).eq("id", playlist_id).execute()
+        return True
+    except Exception:
+        return False
+
+
+def delete_playlist(playlist_id: str) -> bool:
+    sb = get_supabase_client()
+    uid = get_user_id()
+    if not sb or not uid:
+        return False
+    try:
+        sb.table("bc_playlists").delete().eq("id", playlist_id).eq("owner_user_id", uid).execute()
+        return True
+    except Exception:
+        return False

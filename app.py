@@ -32,6 +32,13 @@ from app_modules.busy_supabase import (
     update_profile,
     update_song,
     create_song,
+    create_playlist,
+    list_my_playlists,
+    list_public_playlists,
+    add_song_to_playlist,
+    get_playlist_songs,
+    remove_song_from_playlist,
+    delete_playlist,
 )
 
 st.set_page_config(
@@ -98,22 +105,14 @@ def inject_css():
         .busy-section-title {font-size:22px; font-weight:950; letter-spacing:-.03em; margin:14px 0 10px; color:#24211e;}
         .busy-page-subtitle {font-size:13px; color:var(--busy-muted); margin-top:-5px; margin-bottom:12px;}
         .busy-card {border:1px solid rgba(231,221,208,.95); border-radius:18px; padding:15px; background:rgba(255,253,248,.86); height:100%; box-shadow:0 8px 24px rgba(72,60,47,.055);}
-        .busy-chart-head {display:grid; grid-template-columns:58px 76px minmax(240px,1fr) 230px 210px; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid #e7ddd0; color:#8a7d70; font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.08em;}
-        .busy-chart-row {display:grid; grid-template-columns:58px 76px minmax(240px,1fr) 230px 210px; gap:12px; align-items:center; padding:12px 16px; border-bottom:1px solid rgba(231,221,208,.82); transition:background .16s ease, transform .16s ease;}
-        .busy-chart-row:hover {background:rgba(241,234,223,.62);}
-        .busy-chart-row:last-child {border-bottom:0;}
-        .busy-rank {font-size:16px; font-weight:1000; color:#776b60; text-align:center;}
-        .busy-rank.hot {color:#2f3a2f;}
-        .busy-cover-img {width:64px; height:64px; object-fit:cover; border-radius:14px; background:#f2ece2; display:block; box-shadow:0 8px 20px rgba(72,60,47,.10);}
-        .busy-track-title {font-weight:1000; font-size:15px; line-height:1.22; color:#24211e; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-        .busy-track-artist {font-size:12px; color:#6f655b; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-        .busy-track-tags {font-size:11px; color:#94877a; margin-top:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-        .busy-stats {font-size:12px; color:#51483f; display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-start;}
-        .busy-pill {display:inline-flex; align-items:center; gap:4px; border:1px solid #e7ddd0; border-radius:999px; padding:4px 9px; background:#fbf7ef; font-weight:750;}
-        .busy-actions {display:flex; gap:7px;}
-        .busy-now-playing {border:1px solid rgba(231,221,208,.95); border-radius:20px; padding:14px; background:rgba(255,253,248,.88); box-shadow:0 10px 28px rgba(72,60,47,.06); margin:12px 0 16px;}
-        [data-testid="stVerticalBlockBorderWrapper"] {border-color:#e7ddd0 !important; border-radius:18px !important; background:rgba(255,253,248,.78) !important; box-shadow:0 8px 22px rgba(72,60,47,.045) !important;}
-        [data-testid="stVerticalBlockBorderWrapper"]:hover {background:rgba(251,247,239,.9) !important;}
+        .busy-song-grid {display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;}
+        .busy-song-card {border:1px solid rgba(231,221,208,.95); border-radius:20px; padding:12px; background:rgba(255,253,248,.88); box-shadow:0 10px 26px rgba(72,60,47,.07); transition:transform .16s ease, box-shadow .16s ease, background .16s ease;}
+        .busy-song-card:hover {transform:translateY(-2px); background:rgba(255,253,248,.96); box-shadow:0 14px 32px rgba(72,60,47,.10);}
+        .busy-cover-img {width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:16px; background:#f2ece2; display:block;}
+        .busy-song-title {font-weight:900; font-size:15px; margin-top:9px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#24211e;}
+        .busy-song-meta {font-size:12px; color:var(--busy-muted); line-height:1.35; margin-top:3px; min-height:32px;}
+        .busy-stats {font-size:12px; color:#51483f; display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+        .busy-pill {display:inline-flex; align-items:center; border:1px solid #e7ddd0; border-radius:999px; padding:3px 8px; background:#fbf7ef;}
         .busy-muted {color:var(--busy-muted); font-size:12px;}
         .busy-divider {height:1px; background:#e7ddd0; margin:16px 0;}
 
@@ -155,16 +154,10 @@ def inject_css():
           .busy-topbar {display:block;}
           .busy-status {text-align:left; margin-top:10px;}
           .busy-brand-title {font-size:20px;}
-          .busy-chart-head {display:none;}
-          .busy-chart-row {grid-template-columns:46px 64px minmax(0,1fr); gap:10px; padding:12px; margin-bottom:10px; border:1px solid #e7ddd0; border-radius:18px; background:rgba(255,253,248,.86); box-shadow:0 8px 22px rgba(72,60,47,.055);}
-          .busy-chart-row > div:nth-child(4), .busy-chart-row > div:nth-child(5) {grid-column:3 / 4;}
-          .busy-cover-img {width:58px; height:58px; border-radius:13px;}
-          .busy-stats {margin-top:7px;}
+          .busy-song-grid {grid-template-columns: repeat(2, minmax(0, 1fr)); gap:10px;}
         }
         @media (max-width: 520px) {
-          .busy-chart-row {grid-template-columns:38px 58px minmax(0,1fr);}
-          .busy-rank {font-size:14px;}
-          .busy-track-title {font-size:14px;}
+          .busy-song-grid {grid-template-columns:1fr;}
         }
         </style>
         """,
@@ -219,87 +212,36 @@ def song_artist(song: Dict) -> str:
     return song.get("artist_name") or prof.get("display_name") or "Unknown"
 
 
-def render_song_row(song: Dict, rank: int, liked: bool):
+def render_song_card(song: Dict, rank: int, liked: bool):
     song_id = str(song.get("id"))
     cover = song.get("cover_url") or ""
     title = song.get("title") or "Untitled"
     artist = song_artist(song)
     tags = song.get("style_tags") or ""
-    uploaded = format_date(song.get("created_at"))
-
-    with st.container(border=True):
-        cols = st.columns([0.45, 0.8, 3.4, 1.55, 1.75], gap="small", vertical_alignment="center")
-        with cols[0]:
-            rank_color = "#2f3a2f" if rank <= 3 else "#776b60"
-            st.markdown(f"<div class='busy-rank' style='color:{rank_color}'>#{rank}</div>", unsafe_allow_html=True)
-        with cols[1]:
-            if cover:
-                st.markdown(f"<img class='busy-cover-img' src='{html.escape(cover)}' onerror='this.style.opacity=.12'>", unsafe_allow_html=True)
-            else:
-                st.markdown("<div class='busy-cover-img'></div>", unsafe_allow_html=True)
-        with cols[2]:
-            st.markdown(
-                f"""
-                <div class="busy-track-title">{html.escape(title)}</div>
-                <div class="busy-track-artist">{html.escape(artist)}</div>
-                <div class="busy-track-tags">{html.escape(tags[:140])}</div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with cols[3]:
-            st.markdown(
-                f"""
-                <div class="busy-stats">
-                  <span class="busy-pill">▶ {int(song.get('play_count') or 0)}</span>
-                  <span class="busy-pill">♥ {int(song.get('like_count') or 0)}</span>
-                  <span class="busy-pill">💬 {int(song.get('comment_count') or 0)}</span>
-                </div>
-                <div class="busy-muted" style="margin-top:7px;">{html.escape(uploaded[:16])}</div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with cols[4]:
-            b1, b2 = st.columns([1, 1], gap="small")
-            with b1:
-                if st.button("재생", key=f"play_{song_id}", use_container_width=True, type="primary" if st.session_state.get("selected_song_id") == song_id else "secondary"):
-                    st.session_state["selected_song_id"] = song_id
-                    st.session_state["show_song_detail"] = False
-                    rerun()
-            with b2:
-                if st.button("상세", key=f"detail_{song_id}", use_container_width=True):
-                    st.session_state["selected_song_id"] = song_id
-                    st.session_state["show_song_detail"] = True
-                    rerun()
-            if st.button("♥ 좋아요" if not liked else "♥ 취소", key=f"like_{song_id}", use_container_width=True):
-                toggle_song_like(song_id)
-                rerun()
-
-
-def render_now_playing(song_id: str):
-    song = get_song(song_id)
-    if not song:
-        return
-    title = song.get("title") or "Untitled"
-    artist = song_artist(song)
     st.markdown(
         f"""
-        <div class="busy-now-playing">
-          <div class="busy-muted">재생 중</div>
-          <div class="busy-track-title">{html.escape(title)}</div>
-          <div class="busy-track-artist">{html.escape(artist)}</div>
+        <div class="busy-song-card">
+          <img class="busy-cover-img" src="{html.escape(cover)}" onerror="this.style.opacity=.15">
+          <div class="busy-song-title">#{rank} {html.escape(title)}</div>
+          <div class="busy-song-meta">{html.escape(artist)}<br>{html.escape(tags[:90])}</div>
+          <div class="busy-stats">
+            <span class="busy-pill">▶ {int(song.get('play_count') or 0)}</span>
+            <span class="busy-pill">♥ {int(song.get('like_count') or 0)}</span>
+            <span class="busy-pill">💬 {int(song.get('comment_count') or 0)}</span>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    render_audio_tracker(
-        song_id=str(song.get("id")),
-        audio_url=song.get("audio_url") or "",
-        title=title,
-        cover_url=song.get("cover_url") or "",
-        public_config=get_public_config(),
-        session_id=get_session_id(),
-        height=106,
-    )
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("♥ 좋아요" if not liked else "♥ 취소", key=f"like_{song_id}", use_container_width=True):
+            toggle_song_like(song_id)
+            rerun()
+    with b2:
+        if st.button("재생 / 상세", key=f"detail_{song_id}", use_container_width=True, type="primary" if st.session_state.get("selected_song_id") == song_id else "secondary"):
+            st.session_state["selected_song_id"] = song_id
+            rerun()
 
 
 def render_chart():
@@ -309,33 +251,24 @@ def render_chart():
           <div class='busy-hero-sub'>새로운 업로드와 지금 많이 듣는 곡.</div>
         </div>
         """, unsafe_allow_html=True)
-    controls = st.columns([1.1, .9, 2.8], gap="small")
-    with controls[0]:
+    st.markdown("<div class='busy-section-title'>차트</div>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
         order_label = st.selectbox("정렬", ["트렌딩", "최신", "좋아요", "재생수"], label_visibility="collapsed")
-    with controls[1]:
+    with c2:
         limit = st.selectbox("표시", [50, 100, 200, 300], index=0, label_visibility="collapsed")
     order_map = {"트렌딩": "score", "최신": "new", "좋아요": "liked", "재생수": "played"}
     songs = list_songs(limit=limit, order=order_map[order_label])
     if not songs:
         st.markdown("<div class='busy-card busy-muted'>아직 등록된 곡이 없습니다.</div>", unsafe_allow_html=True)
         return
-
+    liked = liked_song_ids([str(s.get("id")) for s in songs])
+    cols = st.columns(4)
+    for idx, song in enumerate(songs, start=1):
+        with cols[(idx - 1) % 4]:
+            render_song_card(song, idx, str(song.get("id")) in liked)
     selected = st.session_state.get("selected_song_id")
     if selected:
-        render_now_playing(selected)
-
-    liked = liked_song_ids([str(s.get("id")) for s in songs])
-    st.markdown(
-        """
-        <div class="busy-chart-head"><div>순위</div><div>커버</div><div>곡</div><div>반응</div><div>액션</div></div>
-        """,
-        unsafe_allow_html=True,
-    )
-    for idx, song in enumerate(songs, start=1):
-        render_song_row(song, idx, str(song.get("id")) in liked)
-
-    selected = st.session_state.get("selected_song_id")
-    if selected and st.session_state.get("show_song_detail"):
         st.markdown("<div class='busy-divider'></div>", unsafe_allow_html=True)
         render_song_detail(selected)
 
@@ -358,25 +291,40 @@ def render_song_detail(song_id: str):
             cover_url=song.get("cover_url") or "",
             public_config=get_public_config(),
             session_id=get_session_id(),
-            height=112,
+            height=132,
+            loudness_gain_db=song.get("loudness_gain_db"),
+            integrated_lufs=song.get("integrated_lufs"),
+            true_peak_db=song.get("true_peak_db"),
         )
         if st.button("♥ 좋아요 / 취소", key=f"detail_like_{song_id}", use_container_width=True):
             toggle_song_like(song_id)
             rerun()
+        if is_logged_in():
+            pls = list_my_playlists()
+            if pls:
+                names = [p.get("name") or "Untitled" for p in pls]
+                idx = st.selectbox("플레이리스트에 추가", list(range(len(pls))), format_func=lambda i: names[i], key=f"pl_add_{song_id}")
+                if st.button("+ 플레이리스트 추가", key=f"pl_add_btn_{song_id}", use_container_width=True):
+                    if add_song_to_playlist(str(pls[idx].get("id")), song_id):
+                        st.success("플레이리스트에 추가되었습니다.")
+            else:
+                st.caption("플레이리스트를 만들면 곡을 저장할 수 있습니다.")
     with right:
         st.caption(f"아티스트: {song_artist(song)}")
         st.caption(f"업로드: {format_date(song.get('created_at'))}")
+        if song.get("loudness_status") == "ok":
+            st.caption(f"Loudness: {song.get('integrated_lufs')} LUFS · TP {song.get('true_peak_db')} dB · Gain {song.get('loudness_gain_db')} dB")
         st.write(song.get("description") or "")
         if song.get("style_tags"):
-            st.markdown(f"**스타일태그**: {song.get('style_tags')}")
-        with st.expander("가사", expanded=False):
+            st.markdown(f"**Style Tags**: {song.get('style_tags')}")
+        with st.expander("Lyrics", expanded=False):
             st.text(song.get("lyrics") or "")
     render_comments(song)
 
 
 def render_comments(song: Dict):
     song_id = str(song.get("id"))
-    st.markdown("<div class='busy-section-title'>댓글</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-section-title'>Comments</div>", unsafe_allow_html=True)
     if not song.get("comments_enabled", True):
         st.info("이 곡은 댓글 작성이 비활성화되어 있습니다.")
     elif is_logged_in():
@@ -403,7 +351,7 @@ def render_comments(song: Dict):
 
 
 def render_profile_page():
-    st.markdown("<div class='busy-section-title'>프로필</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-section-title'>Profile</div>", unsafe_allow_html=True)
     if not is_logged_in():
         st.info("로그인이 필요합니다.")
         return
@@ -413,9 +361,9 @@ def render_profile_page():
         if profile.get("avatar_url"):
             st.image(profile.get("avatar_url"), width=180)
         else:
-            st.markdown("<div class='busy-card busy-muted'>아바타 없음</div>", unsafe_allow_html=True)
+            st.markdown("<div class='busy-card busy-muted'>No avatar</div>", unsafe_allow_html=True)
         if profile.get("email"):
-            st.caption(f"이메일: {profile.get('email')}")
+            st.caption(f"Email: {profile.get('email')}")
     with right:
         with st.form("profile_form"):
             display_name = st.text_input("닉네임", value=profile.get("display_name") or "", max_chars=80)
@@ -444,12 +392,12 @@ def render_profile_page():
 
 
 def render_upload_page():
-    st.markdown("<div class='busy-section-title'>업로드</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-section-title'>Upload</div>", unsafe_allow_html=True)
     if not is_logged_in():
         st.info("업로드는 로그인 후 사용할 수 있습니다.")
         return
     ensure_profile()
-    st.markdown(f"<div class='busy-page-subtitle'>MP3 up to {MAX_AUDIO_MB}MB · Cover image up to {MAX_COVER_MB}MB</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='busy-page-subtitle'>MP3 up to {MAX_AUDIO_MB}MB · Cover image up to {MAX_COVER_MB}MB · -14 LUFS playback normalization</div>", unsafe_allow_html=True)
     with st.form("upload_form"):
         title = st.text_input("노래 제목 *", max_chars=160)
         style_tags = st.text_input("스타일태그 / 장르", placeholder="예: hard psy, vocal chop, synth-pop", max_chars=300)
@@ -473,16 +421,16 @@ def render_upload_page():
 
 
 def render_manage_page():
-    st.markdown("<div class='busy-section-title'>업로드 관리</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-section-title'>My Uploads</div>", unsafe_allow_html=True)
     if not is_logged_in():
         st.info("로그인이 필요합니다.")
         return
     songs = list_my_songs()
-    if st.button("+ 새 곡 업로드"):
+    if st.button("+ New Upload"):
         st.session_state["busy_nav"] = "Upload"
         rerun()
     if not songs:
-        st.markdown("<div class='busy-card busy-muted'>아직 업로드한 곡이 없습니다.</div>", unsafe_allow_html=True)
+        st.markdown("<div class='busy-card busy-muted'>No uploads yet.</div>", unsafe_allow_html=True)
         return
     for song in songs:
         with st.expander(f"{song.get('title')} · {song.get('visibility')} · {song.get('status')}"):
@@ -491,6 +439,8 @@ def render_manage_page():
                 if song.get("cover_url"):
                     st.image(song.get("cover_url"), use_container_width=True)
                 st.caption(f"▶ {song.get('play_count',0)} · ♥ {song.get('like_count',0)} · 💬 {song.get('comment_count',0)}")
+                if song.get("loudness_status") == "ok":
+                    st.caption(f"{song.get('integrated_lufs')} LUFS · Gain {song.get('loudness_gain_db')} dB")
             with right:
                 with st.form(f"edit_{song.get('id')}"):
                     title = st.text_input("제목", value=song.get("title") or "", key=f"title_{song.get('id')}")
@@ -523,12 +473,87 @@ def render_manage_page():
 
 def render_playlists_page():
     st.markdown("<div class='busy-section-title'>플레이리스트</div>", unsafe_allow_html=True)
-    st.markdown("<div class='busy-card busy-muted'>준비 중</div>", unsafe_allow_html=True)
+    if is_logged_in():
+        with st.expander("새 플레이리스트", expanded=False):
+            with st.form("new_playlist_form"):
+                name = st.text_input("이름", max_chars=120)
+                desc = st.text_area("설명", max_chars=1000)
+                visibility = st.selectbox("공개 상태", ["public", "private"], index=0)
+                if st.form_submit_button("만들기"):
+                    if create_playlist(name, desc, visibility):
+                        st.success("플레이리스트가 생성되었습니다.")
+                        rerun()
+        my_pls = list_my_playlists()
+        if my_pls:
+            st.markdown("<div class='busy-page-subtitle'>내 플레이리스트</div>", unsafe_allow_html=True)
+            for pl in my_pls:
+                with st.expander(f"{pl.get('name')} · {pl.get('visibility')}"):
+                    st.write(pl.get("description") or "")
+                    songs = get_playlist_songs(str(pl.get("id")))
+                    if not songs:
+                        st.caption("아직 담긴 곡이 없습니다.")
+                    for idx, song in enumerate(songs, start=1):
+                        c1, c2, c3 = st.columns([.55, 3, 1])
+                        with c1:
+                            if song.get("cover_url"):
+                                st.image(song.get("cover_url"), width=54)
+                        with c2:
+                            st.markdown(f"**{idx}. {html.escape(song.get('title') or 'Untitled')}**")
+                            st.caption(song_artist(song))
+                        with c3:
+                            if st.button("열기", key=f"open_pl_{pl.get('id')}_{song.get('id')}"):
+                                st.session_state["selected_song_id"] = str(song.get("id"))
+                                st.session_state["busy_nav"] = "Chart"
+                                rerun()
+                            if st.button("삭제", key=f"rm_pl_{pl.get('id')}_{song.get('id')}"):
+                                remove_song_from_playlist(str(pl.get("id")), str(song.get("id")))
+                                rerun()
+                    if st.button("플레이리스트 삭제", key=f"delete_playlist_{pl.get('id')}"):
+                        delete_playlist(str(pl.get("id")))
+                        rerun()
+    public_pls = list_public_playlists()
+    if public_pls:
+        st.markdown("<div class='busy-divider'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='busy-page-subtitle'>공개 플레이리스트</div>", unsafe_allow_html=True)
+        cols = st.columns(3)
+        for i, pl in enumerate(public_pls):
+            with cols[i % 3]:
+                st.markdown(f"<div class='busy-card'><b>{html.escape(pl.get('name') or 'Untitled')}</b><br><span class='busy-muted'>{html.escape(pl.get('description') or '')}</span></div>", unsafe_allow_html=True)
+    elif not is_logged_in():
+        st.markdown("<div class='busy-card busy-muted'>공개 플레이리스트가 아직 없습니다.</div>", unsafe_allow_html=True)
 
 
 def render_ai_curation_page():
     st.markdown("<div class='busy-section-title'>AI 큐레이션</div>", unsafe_allow_html=True)
-    st.markdown("<div class='busy-card busy-muted'>준비 중</div>", unsafe_allow_html=True)
+    theme = st.text_input("원하는 분위기", placeholder="예: 새벽 드라이브, 하드한 운동용, 비 오는 날")
+    count = st.slider("곡 수", 5, 30, 12)
+    if st.button("큐레이션 미리보기", type="primary"):
+        songs = list_songs(limit=200, order="score")
+        words = [w.strip().lower() for w in theme.replace(',', ' ').split() if w.strip()]
+        if words:
+            ranked = []
+            for s in songs:
+                hay = f"{s.get('title','')} {s.get('style_tags','')} {s.get('description','')} {s.get('lyrics','')}".lower()
+                score = sum(1 for w in words if w in hay)
+                if score:
+                    ranked.append((score, s))
+            songs = [s for _, s in sorted(ranked, key=lambda x: x[0], reverse=True)] or songs
+        st.session_state["ai_preview_song_ids"] = [str(s.get("id")) for s in songs[:count]]
+    ids = st.session_state.get("ai_preview_song_ids") or []
+    if ids:
+        all_songs = {str(s.get("id")): s for s in list_songs(limit=300, order="score")}
+        for idx, sid in enumerate(ids, start=1):
+            s = all_songs.get(sid)
+            if not s: continue
+            st.markdown(f"<div class='busy-card'><b>{idx}. {html.escape(s.get('title') or 'Untitled')}</b><br><span class='busy-muted'>{html.escape(song_artist(s))} · {html.escape(s.get('style_tags') or '')}</span></div>", unsafe_allow_html=True)
+        if is_logged_in() and st.button("이 목록으로 플레이리스트 만들기"):
+            pl_id = create_playlist(theme or "AI Curation", "AI 큐레이션으로 만든 플레이리스트", "public")
+            if pl_id:
+                for sid in ids:
+                    add_song_to_playlist(pl_id, sid)
+                st.success("플레이리스트로 저장되었습니다.")
+                st.session_state["busy_nav"] = "Playlists"
+                rerun()
 
 
 def render_my_page():
