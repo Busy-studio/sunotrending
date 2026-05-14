@@ -58,44 +58,72 @@ def inject_css():
         [data-testid="stStatusWidget"] {display:none !important;}
         .stDeployButton {display:none !important;}
 
+        :root {
+          --busy-bg:#fbf8ff;
+          --busy-card:#ffffff;
+          --busy-line:#eadff7;
+          --busy-text:#2d2540;
+          --busy-muted:#7f7196;
+          --busy-lavender:#d9ccff;
+          --busy-mint:#c9f1e7;
+          --busy-peach:#ffd9c8;
+          --busy-sky:#cfe9ff;
+          --busy-accent:#8b6eea;
+        }
+        html, body, [data-testid="stAppViewContainer"] {
+          background:
+            radial-gradient(circle at top left, rgba(217,204,255,.48), transparent 34%),
+            radial-gradient(circle at top right, rgba(201,241,231,.55), transparent 32%),
+            linear-gradient(180deg, #fffbfe 0%, #f8fbff 100%) !important;
+          color:var(--busy-text);
+        }
         .block-container {padding-top: 1.05rem; padding-bottom: 3rem; max-width: 1440px;}
         .busy-topbar {
           display:flex; align-items:center; justify-content:space-between; gap:16px;
-          border:1px solid #e5e7eb; border-radius:18px; padding:12px 14px;
-          background:rgba(255,255,255,.92); backdrop-filter:blur(12px);
-          box-shadow:0 8px 30px rgba(15,23,42,.04); margin-bottom:14px;
+          border:1px solid rgba(234,223,247,.95); border-radius:20px; padding:12px 14px;
+          background:rgba(255,255,255,.78); backdrop-filter:blur(16px);
+          box-shadow:0 14px 40px rgba(93,75,137,.08); margin-bottom:14px;
         }
         .busy-brand {display:flex; align-items:center; gap:10px;}
-        .busy-logo {width:36px; height:36px; border-radius:11px; display:flex; align-items:center; justify-content:center; background:#111827; color:white; font-weight:900;}
-        .busy-brand-title {font-size:22px; font-weight:1000; letter-spacing:-.04em; line-height:1;}
-        .busy-brand-sub {font-size:12px; color:#6b7280; margin-top:4px;}
-        .busy-status {font-size:12px; color:#6b7280; text-align:right;}
-        .busy-hero {border:1px solid #e5e7eb; border-radius:22px; padding:22px; background:linear-gradient(135deg,#111827,#374151); color:#fff; margin:14px 0 18px;}
+        .busy-logo {width:38px; height:38px; border-radius:14px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#b8a7ff,#9de8d7); color:#2d2540; font-weight:1000; box-shadow:0 8px 20px rgba(139,110,234,.18);}
+        .busy-brand-title {font-size:22px; font-weight:1000; letter-spacing:-.04em; line-height:1; color:#2d2540;}
+        .busy-brand-sub {font-size:12px; color:var(--busy-muted); margin-top:4px;}
+        .busy-status {font-size:12px; color:var(--busy-muted); text-align:right;}
+        .busy-hero {border:1px solid rgba(234,223,247,.95); border-radius:26px; padding:24px; background:linear-gradient(135deg,#f3edff 0%,#e9fbf6 50%,#fff1ea 100%); color:#2d2540; margin:14px 0 18px; box-shadow:0 18px 50px rgba(93,75,137,.08);}
         .busy-hero-title {font-size:30px; font-weight:1000; letter-spacing:-.05em; line-height:1;}
-        .busy-hero-sub {font-size:13px; color:#d1d5db; margin-top:8px;}
-        .busy-user-chip {display:flex; align-items:center; justify-content:flex-end; gap:8px; font-size:13px; color:#111827; font-weight:700;}
-        .busy-avatar-sm {width:28px; height:28px; border-radius:999px; object-fit:cover; background:#e5e7eb;}
-        .busy-section-title {font-size:22px; font-weight:950; letter-spacing:-.03em; margin:14px 0 10px;}
-        .busy-page-subtitle {font-size:13px; color:#6b7280; margin-top:-5px; margin-bottom:12px;}
-        .busy-card {border:1px solid #e5e7eb; border-radius:18px; padding:14px; background:#fff; height:100%;}
+        .busy-hero-sub {font-size:13px; color:#766a8f; margin-top:8px;}
+        .busy-user-chip {display:flex; align-items:center; justify-content:flex-end; gap:8px; font-size:13px; color:#2d2540; font-weight:800;}
+        .busy-avatar-sm {width:28px; height:28px; border-radius:999px; object-fit:cover; background:#efe9fb;}
+        .busy-section-title {font-size:22px; font-weight:950; letter-spacing:-.03em; margin:14px 0 10px; color:#2d2540;}
+        .busy-page-subtitle {font-size:13px; color:var(--busy-muted); margin-top:-5px; margin-bottom:12px;}
+        .busy-card {border:1px solid rgba(234,223,247,.95); border-radius:20px; padding:15px; background:rgba(255,255,255,.82); height:100%; box-shadow:0 8px 24px rgba(93,75,137,.055);}
         .busy-song-grid {display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;}
-        .busy-song-card {border:1px solid #e5e7eb; border-radius:18px; padding:12px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.03);}
-        .busy-cover-img {width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:14px; background:#f3f4f6; display:block;}
-        .busy-song-title {font-weight:900; font-size:15px; margin-top:9px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-        .busy-song-meta {font-size:12px; color:#6b7280; line-height:1.35; margin-top:3px; min-height:32px;}
-        .busy-stats {font-size:12px; color:#374151; display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
-        .busy-pill {display:inline-flex; align-items:center; border:1px solid #e5e7eb; border-radius:999px; padding:3px 8px; background:#f9fafb;}
-        .busy-muted {color:#6b7280; font-size:12px;}
-        .busy-divider {height:1px; background:#e5e7eb; margin:16px 0;}
+        .busy-song-card {border:1px solid rgba(234,223,247,.95); border-radius:22px; padding:12px; background:rgba(255,255,255,.86); box-shadow:0 10px 26px rgba(93,75,137,.07);}
+        .busy-cover-img {width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:17px; background:#f5f0ff; display:block;}
+        .busy-song-title {font-weight:900; font-size:15px; margin-top:9px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#2d2540;}
+        .busy-song-meta {font-size:12px; color:var(--busy-muted); line-height:1.35; margin-top:3px; min-height:32px;}
+        .busy-stats {font-size:12px; color:#55496e; display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+        .busy-pill {display:inline-flex; align-items:center; border:1px solid #eadff7; border-radius:999px; padding:3px 8px; background:#fbf8ff;}
+        .busy-muted {color:var(--busy-muted); font-size:12px;}
+        .busy-divider {height:1px; background:#eadff7; margin:16px 0;}
 
-        /* Menu buttons: flatter rectangular website menu, not pill tabs */
+        /* Website-like menu buttons */
         div[data-testid="stHorizontalBlock"] button[kind="secondary"],
         div[data-testid="stHorizontalBlock"] button[kind="primary"] {
-          border-radius:10px !important;
+          border-radius:12px !important;
           min-height:38px;
           box-shadow:none !important;
+          border:1px solid #eadff7 !important;
         }
-        button {font-weight:700 !important;}
+        div[data-testid="stHorizontalBlock"] button[kind="primary"] {
+          background:linear-gradient(135deg,#d9ccff,#c9f1e7) !important;
+          color:#2d2540 !important;
+        }
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+          background:rgba(255,255,255,.72) !important;
+          color:#594d72 !important;
+        }
+        button {font-weight:750 !important;}
 
         @media (max-width: 900px) {
           .block-container {padding-left:.75rem; padding-right:.75rem;}
@@ -142,38 +170,7 @@ def render_header():
         unsafe_allow_html=True,
     )
 
-    nav_col, account_col = st.columns([4.8, 1.8], gap="medium")
-    with nav_col:
-        render_nav_buttons()
-    with account_col:
-        if is_logged_in():
-            if hasattr(st, "popover"):
-                with st.popover(f"👤 {display_name}", use_container_width=True):
-                    st.markdown(f"<div class='busy-user-chip'>{avatar_html}<span>{html.escape(display_name)}</span></div>", unsafe_allow_html=True)
-                    email = (profile or {}).get("email") or ""
-                    if email:
-                        st.caption(email)
-                    if st.button("프로필 수정", use_container_width=True):
-                        st.session_state["busy_nav"] = "Profile"
-                        rerun()
-                    if st.button("내 업로드 관리", use_container_width=True):
-                        st.session_state["busy_nav"] = "Manage"
-                        rerun()
-                    st.divider()
-                    if st.button("로그아웃", use_container_width=True):
-                        st.logout()
-            else:
-                if st.button(f"👤 {display_name}", use_container_width=True):
-                    st.session_state["busy_nav"] = "Profile"
-                    rerun()
-                if st.button("Logout", use_container_width=True):
-                    st.logout()
-        else:
-            if is_login_available():
-                if st.button("Login", use_container_width=True):
-                    st.login()
-            else:
-                st.caption("Login API unavailable")
+    render_nav_buttons()
 
 
 def format_date(value: str) -> str:
@@ -226,8 +223,8 @@ def render_song_card(song: Dict, rank: int, liked: bool):
 def render_chart():
     st.markdown("""
         <div class='busy-hero'>
-          <div class='busy-hero-title'>Discover uploaded tracks</div>
-          <div class='busy-hero-sub'>Fresh uploads, community likes, and real listening signals.</div>
+          <div class='busy-hero-title'>Busy Chart</div>
+          <div class='busy-hero-sub'>Fresh tracks, playlists, and AI-powered curation.</div>
         </div>
         """, unsafe_allow_html=True)
     st.markdown("<div class='busy-section-title'>Chart</div>", unsafe_allow_html=True)
@@ -433,23 +430,81 @@ def render_manage_page():
                         rerun()
 
 
+def render_playlists_page():
+    st.markdown("<div class='busy-section-title'>Playlists</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-card busy-muted'>플레이리스트 기능은 다음 단계에서 연결됩니다.</div>", unsafe_allow_html=True)
+
+
+def render_ai_curation_page():
+    st.markdown("<div class='busy-section-title'>AI Curation</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-card busy-muted'>업로드된 곡을 바탕으로 AI 플레이리스트를 만드는 기능을 준비 중입니다.</div>", unsafe_allow_html=True)
+
+
+def render_my_page():
+    if not is_logged_in():
+        st.markdown("<div class='busy-section-title'>Account</div>", unsafe_allow_html=True)
+        if is_login_available():
+            if st.button("로그인", use_container_width=True, type="primary"):
+                st.login()
+        else:
+            st.info("Login API unavailable")
+        return
+    profile = ensure_profile() or {}
+    display_name = profile.get("display_name") or profile.get("email") or "내 계정"
+    avatar = profile.get("avatar_url") or ""
+    st.markdown(f"<div class='busy-section-title'>{html.escape(display_name)}</div>", unsafe_allow_html=True)
+    left, right = st.columns([1, 2], gap="large")
+    with left:
+        if avatar:
+            st.image(avatar, width=180)
+        if profile.get("email"):
+            st.caption(profile.get("email"))
+        if st.button("프로필 수정", use_container_width=True):
+            st.session_state["busy_nav"] = "Profile"
+            rerun()
+        if st.button("업로드 관리", use_container_width=True):
+            st.session_state["busy_nav"] = "Manage"
+            rerun()
+        if st.button("새 곡 업로드", use_container_width=True, type="primary"):
+            st.session_state["busy_nav"] = "Upload"
+            rerun()
+        st.divider()
+        if st.button("로그아웃", use_container_width=True):
+            st.logout()
+    with right:
+        bio = profile.get("bio") or ""
+        if bio:
+            st.write(bio)
+        links = []
+        for label, key in [("Suno", "suno_url"), ("Spotify", "spotify_url"), ("YouTube", "youtube_url"), ("Instagram", "instagram_url"), ("Website", "website_url")]:
+            url = profile.get(key)
+            if url:
+                links.append(f"[{label}]({url})")
+        if links:
+            st.markdown(" · ".join(links))
+        st.markdown("<div class='busy-divider'></div>", unsafe_allow_html=True)
+        my_count = len(list_my_songs())
+        st.markdown(f"<div class='busy-card'>업로드한 곡 <b>{my_count}</b>개</div>", unsafe_allow_html=True)
+
+
 def nav_items() -> List[str]:
-    items = ["Chart"]
-    if is_logged_in():
-        items += ["Upload", "Manage"]
-    return items
+    return ["Chart", "Playlists", "AI", "My"]
 
 
 def render_nav_buttons():
     items = nav_items()
-    labels = {"Chart": "차트", "Upload": "업로드", "Manage": "업로드 관리"}
+    profile = ensure_profile() if is_logged_in() else {}
+    if is_logged_in():
+        my_label = (profile or {}).get("display_name") or "내 아이디"
+    else:
+        my_label = "로그인"
+    labels = {"Chart": "차트", "Playlists": "플레이리스트", "AI": "AI 큐레이션", "My": my_label}
     current = st.session_state.get("busy_nav", "Chart")
-    if current not in items:
-        current = "Chart"
+    visible_current = current if current in items else "My" if current in ["Profile", "Upload", "Manage"] else "Chart"
     cols = st.columns(len(items), gap="small")
     for item, col in zip(items, cols):
         with col:
-            button_type = "primary" if item == current else "secondary"
+            button_type = "primary" if item == visible_current else "secondary"
             if st.button(labels.get(item, item), key=f"nav_{item}", type=button_type, use_container_width=True):
                 st.session_state["busy_nav"] = item
                 rerun()
@@ -457,8 +512,8 @@ def render_nav_buttons():
 
 def render_nav():
     current = st.session_state.get("busy_nav", "Chart")
-    items = nav_items()
-    if current not in items:
+    allowed = nav_items() + ["Profile", "Upload", "Manage"]
+    if current not in allowed:
         current = "Chart"
         st.session_state["busy_nav"] = current
     return current
@@ -473,6 +528,12 @@ def main():
     nav = render_nav()
     if nav == "Chart":
         render_chart()
+    elif nav == "Playlists":
+        render_playlists_page()
+    elif nav == "AI":
+        render_ai_curation_page()
+    elif nav == "My":
+        render_my_page()
     elif nav == "Profile":
         render_profile_page()
     elif nav == "Upload":
