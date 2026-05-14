@@ -24,16 +24,16 @@ def render_audio_tracker(song_id: str, audio_url: str, title: str, cover_url: st
       <div class="bc-main">
         <div class="bc-title">{html.escape(title or 'Untitled')}</div>
         <audio id="bc-audio" src="{html.escape(audio_url)}" preload="metadata" controls controlsList="nodownload" style="width:100%"></audio>
-        <div id="bc-status" class="bc-status">30% 이상 재생 시 play count가 1회 반영됩니다.</div>
+        <div id="bc-status" class="bc-status">30% 이상 재생 시 재생수가 반영됩니다.</div>
       </div>
     </div>
     <style>
-      .bc-audio-box {{ display:flex; gap:12px; align-items:center; border:1px solid #e5e7eb; border-radius:16px; padding:10px; background:#fff; }}
-      .bc-cover {{ width:64px; height:64px; border-radius:12px; overflow:hidden; background:#f3f4f6; flex:0 0 64px; }}
+      .bc-audio-box {{ display:flex; gap:12px; align-items:center; border:1px solid #e7ddd0; border-radius:18px; padding:10px; background:#fffdf8; box-shadow:0 8px 24px rgba(72,60,47,.055); }}
+      .bc-cover {{ width:64px; height:64px; border-radius:12px; overflow:hidden; background:#f2ece2; flex:0 0 64px; }}
       .bc-cover img {{ width:100%; height:100%; object-fit:cover; display:block; }}
       .bc-main {{ flex:1; min-width:0; }}
       .bc-title {{ font-weight:900; font-size:14px; margin-bottom:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
-      .bc-status {{ font-size:11px; color:#6b7280; margin-top:3px; }}
+      .bc-status {{ font-size:11px; color:#7b7167; margin-top:3px; }}
     </style>
     <script>
       const cfg = {js};
@@ -44,7 +44,7 @@ def render_audio_tracker(song_id: str, audio_url: str, title: str, cover_url: st
         if (counted || !cfg.supabaseUrl || !cfg.anonKey || !cfg.songId) return;
         counted = true;
         const seconds = Math.floor(audio.currentTime || 0);
-        statusEl.textContent = 'play count 반영 중...';
+        statusEl.textContent = '재생수 반영 중...';
         try {{
           const res = await fetch(cfg.supabaseUrl.replace(/\/$/, '') + '/rest/v1/rpc/bc_record_play', {{
             method: 'POST',
@@ -55,9 +55,9 @@ def render_audio_tracker(song_id: str, audio_url: str, title: str, cover_url: st
             }},
             body: JSON.stringify({{ p_song_id: cfg.songId, p_session_id: cfg.sessionId, p_play_seconds: seconds }})
           }});
-          statusEl.textContent = res.ok ? 'play count 반영됨' : 'play count 반영 실패';
+          statusEl.textContent = res.ok ? '재생수 반영됨' : '재생수 반영 실패';
         }} catch(e) {{
-          statusEl.textContent = 'play count 반영 실패';
+          statusEl.textContent = '재생수 반영 실패';
         }}
       }}
       audio.addEventListener('timeupdate', () => {{
