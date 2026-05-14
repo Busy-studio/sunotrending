@@ -4,3 +4,4 @@ supabase
 numpy
 soundfile
 pyloudnorm
+Authlib>=1.3.2
