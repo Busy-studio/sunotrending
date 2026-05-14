@@ -24,7 +24,7 @@ def render_player_ranking_html(
     default_tab_key="",
     cloud_config_json="{}",
 ):
-    title = clean_payload_text(title) or "Suno Songs"
+    title = clean_payload_text(title) or "Busy Chart"
     subtitle = clean_payload_text(subtitle) or "앨범 이미지를 누르면 해당 곡을 재생 또는 일시정지합니다."
     title_html = html.escape(title)
     subtitle_html = html.escape(subtitle)
@@ -39,15 +39,15 @@ def render_player_ranking_html(
     html_template = """
     <style>
     :root {
-        --bg: #ffffff;
-        --panel: #f8fafc;
-        --line: #e5e7eb;
-        --line-dark: #d1d5db;
-        --text: #111827;
-        --muted: #6b7280;
-        --accent: #ef4444;
-        --accent-dark: #dc2626;
-        --soft: #f3f4f6;
+        --bg: #fbf8f1;
+        --panel: #fffdf8;
+        --line: #e7ddd0;
+        --line-dark: #d3c6b6;
+        --text: #24211e;
+        --muted: #7b7167;
+        --accent: #6f7f63;
+        --accent-dark: #2f3a2f;
+        --soft: #f1eadf;
     }
 
     * { box-sizing: border-box; }
@@ -55,7 +55,7 @@ def render_player_ranking_html(
     html, body {
         margin: 0;
         padding: 0;
-        background: var(--bg);
+        background: transparent;
         color: var(--text);
         font-family:
             "Noto Sans KR", "Noto Sans", "Apple SD Gothic Neo",
@@ -84,8 +84,9 @@ def render_player_ranking_html(
         position: sticky;
         top: 0;
         align-self: stretch;
-        background: var(--panel);
+        background: rgba(255,253,248,.88);
         border: 1px solid var(--line);
+        box-shadow: 0 14px 42px rgba(72,60,47,.07);
         border-radius: 18px;
         padding: 14px;
         height: 100%;
@@ -272,7 +273,7 @@ def render_player_ranking_html(
     }
 
     .small-btn.active {
-        background: #fee2e2;
+        background: #e7eee2;
         color: var(--accent-dark);
         border-color: var(--accent);
     }
@@ -317,7 +318,7 @@ def render_player_ranking_html(
     }
 
     .loudness-btn.active {
-        background: #fee2e2;
+        background: #e7eee2;
         color: var(--accent-dark);
         border-color: var(--accent);
     }
@@ -458,7 +459,7 @@ def render_player_ranking_html(
     }
 
     .playlist-item:last-child { border-bottom: 0; }
-    .playlist-item.active { background: #fee2e2; }
+    .playlist-item.active { background: #e7eee2; }
 
     .playlist-thumb {
         width: 34px;
@@ -1059,8 +1060,7 @@ def render_player_ranking_html(
             </div>
 
             <div class="footer-credit">
-                This page was created by
-                <a href="https://suno.com/@busystudio" target="_blank" rel="noopener noreferrer">Busy Studio</a>.
+                Busy Chart
             </div>
         </main>
     </div>
@@ -1124,8 +1124,36 @@ def render_player_ranking_html(
     const defaultTabKey = __DEFAULT_TAB_KEY__;
     const cloudConfig = decodeB64Json("__CLOUD_CONFIG_JSON_B64__", {});
     const playerEnabled = Boolean(cloudConfig && cloudConfig.playerEnabled);
+    const playRecordEnabled = Boolean(cloudConfig && cloudConfig.playRecordEnabled && cloudConfig.supabaseUrl && cloudConfig.anonKey);
+    const busySessionId = String(cloudConfig && cloudConfig.sessionId || "");
+    const busyRecordedPlayIds = new Set();
 
-    const playlistStorageKey = "sunoTrending.playlist.v1";
+    async function recordBusyPlayForCurrent() {
+        const song = playlist[currentIndex];
+        if (!playRecordEnabled || !song || !song.id) return;
+        const key = String(song.id);
+        if (busyRecordedPlayIds.has(key)) return;
+        busyRecordedPlayIds.add(key);
+        try {
+            await fetch(String(cloudConfig.supabaseUrl).replace(/\/$/, "") + "/rest/v1/rpc/bc_record_play", {
+                method: "POST",
+                headers: {
+                    "content-type": "application/json",
+                    "apikey": cloudConfig.anonKey,
+                    "Authorization": "Bearer " + cloudConfig.anonKey
+                },
+                body: JSON.stringify({
+                    p_song_id: key,
+                    p_session_id: busySessionId || (window.localStorage.getItem("busyChart.sessionId") || "guest"),
+                    p_play_seconds: Math.floor(audio.currentTime || 0)
+                })
+            });
+        } catch (error) {
+            console.warn("Busy play record failed", error);
+        }
+    }
+
+    const playlistStorageKey = "busyChart.playlist.v1";
     const cloudLoadRequestStorageKey = "sunoTrending.cloudLoad.request.v1";
 
     let playlist = [];
@@ -1236,7 +1264,7 @@ def render_player_ranking_html(
     function getTabTitle(key, tab) {
         const raw = tab && tab.title ? String(tab.title).trim() : "";
         if (raw) return raw;
-        return TAB_LABEL_FALLBACKS[key] || prettifyTabKey(key) || "Suno Songs";
+        return TAB_LABEL_FALLBACKS[key] || prettifyTabKey(key) || "Busy Chart";
     }
 
     function getTabDescription(key, tab) {
@@ -1600,7 +1628,7 @@ function cycleSort(key) {
         }
 
         const name = String(cloudPlaylistName && cloudPlaylistName.value ? cloudPlaylistName.value : "").trim()
-            || `Suno Playlist ${new Date().toLocaleString()}`;
+            || `Busy Playlist ${new Date().toLocaleString()}`;
         const songIds = playlist.map(song => String(song && song.id || "").trim()).filter(Boolean);
 
         try {
@@ -1916,7 +1944,7 @@ function cycleSort(key) {
         volumeText.textContent = `${Math.round(userVolume * 100)}%`;
 
         // IMPORTANT:
-        // Suno audio URLs can be cross-origin. Connecting a cross-origin
+        // Busy audio URLs can be cross-origin. Connecting a cross-origin
         // HTMLAudioElement to Web Audio may produce silence in browsers unless
         // the media response has the right CORS headers. To avoid muting playback,
         // keep the main player on the native <audio> output path and apply the
@@ -2338,7 +2366,7 @@ function cycleSort(key) {
 
         suppressStateSave = true;
         audio.pause();
-        // Keep native audio output. Do not force crossOrigin here; some Suno
+        // Keep native audio output. Do not force crossOrigin here; some Busy
         // media URLs may stop playing when anonymous CORS is requested.
         audio.removeAttribute("crossorigin");
         audio.src = song.audio_url;
@@ -2565,6 +2593,9 @@ function cycleSort(key) {
             currentTimeEl.textContent = formatTime(audio.currentTime);
             durationEl.textContent = formatTime(audio.duration);
             savePlaylistStateThrottled();
+            if (audio.duration > 0 && audio.currentTime / audio.duration >= 0.30) {
+                recordBusyPlayForCurrent();
+            }
         }
     });
 
@@ -2586,6 +2617,7 @@ function cycleSort(key) {
     });
 
     audio.addEventListener("ended", () => {
+        recordBusyPlayForCurrent();
         if (repeatOne) {
             audio.currentTime = 0;
             audio.play();
