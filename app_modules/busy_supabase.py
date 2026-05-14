@@ -208,12 +208,44 @@ def ensure_profile() -> Optional[Dict[str, Any]]:
         return None
 
 
-def update_profile(display_name: str, avatar_file=None) -> bool:
+def normalize_url(value: str, max_len: int = 500) -> str:
+    value = clean_text(value, max_len)
+    if not value:
+        return ""
+    if not re.match(r"^https?://", value, re.I):
+        value = "https://" + value
+    return value
+
+
+def update_profile(
+    display_name: str,
+    avatar_file=None,
+    bio: str = "",
+    suno_url: str = "",
+    spotify_url: str = "",
+    youtube_url: str = "",
+    instagram_url: str = "",
+    website_url: str = "",
+) -> bool:
     sb = get_supabase_client()
     auth = get_auth_user()
     if not sb or not auth:
         return False
-    payload = {"display_name": clean_text(display_name, 80), "updated_at": now_iso()}
+    display_name = clean_text(display_name, 80)
+    bio = clean_text(bio, 500)
+    if has_bad_words(display_name + bio):
+        st.error("프로필 내용에 사용할 수 없는 표현이 포함되어 있습니다.")
+        return False
+    payload = {
+        "display_name": display_name or auth.get("name") or auth.get("email") or "Busy User",
+        "bio": bio,
+        "suno_url": normalize_url(suno_url),
+        "spotify_url": normalize_url(spotify_url),
+        "youtube_url": normalize_url(youtube_url),
+        "instagram_url": normalize_url(instagram_url),
+        "website_url": normalize_url(website_url),
+        "updated_at": now_iso(),
+    }
     if avatar_file:
         ok, msg, ext = validate_upload_file(avatar_file, AVATAR_EXTS, MAX_AVATAR_MB, "아바타")
         if not ok:

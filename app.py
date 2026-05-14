@@ -48,14 +48,36 @@ def inject_css():
     st.markdown(
         """
         <style>
+        /* Hide Streamlit chrome as much as possible for a standalone platform look */
         #MainMenu {visibility:hidden;}
         footer {visibility:hidden;}
-        header[data-testid="stHeader"] {background: rgba(255,255,255,0.85); backdrop-filter: blur(10px);}
-        .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1440px;}
-        .busy-hero {border:1px solid #e5e7eb; border-radius:24px; padding:22px 22px; background:linear-gradient(135deg,#fff,#f8fafc); margin-bottom:14px;}
-        .busy-title {font-size:34px; font-weight:1000; letter-spacing:-0.04em; margin:0;}
-        .busy-subtitle {font-size:14px; color:#6b7280; margin-top:6px;}
-        .busy-card {border:1px solid #e5e7eb; border-radius:20px; padding:14px; background:#fff; height:100%;}
+        header[data-testid="stHeader"] {height:0rem; background: transparent;}
+        header[data-testid="stHeader"] * {display:none;}
+        [data-testid="stToolbar"] {display:none !important;}
+        [data-testid="stDecoration"] {display:none !important;}
+        [data-testid="stStatusWidget"] {display:none !important;}
+        .stDeployButton {display:none !important;}
+
+        .block-container {padding-top: 1.05rem; padding-bottom: 3rem; max-width: 1440px;}
+        .busy-topbar {
+          display:flex; align-items:center; justify-content:space-between; gap:16px;
+          border:1px solid #e5e7eb; border-radius:18px; padding:12px 14px;
+          background:rgba(255,255,255,.92); backdrop-filter:blur(12px);
+          box-shadow:0 8px 30px rgba(15,23,42,.04); margin-bottom:14px;
+        }
+        .busy-brand {display:flex; align-items:center; gap:10px;}
+        .busy-logo {width:36px; height:36px; border-radius:11px; display:flex; align-items:center; justify-content:center; background:#111827; color:white; font-weight:900;}
+        .busy-brand-title {font-size:22px; font-weight:1000; letter-spacing:-.04em; line-height:1;}
+        .busy-brand-sub {font-size:12px; color:#6b7280; margin-top:4px;}
+        .busy-status {font-size:12px; color:#6b7280; text-align:right;}
+        .busy-hero {border:1px solid #e5e7eb; border-radius:22px; padding:22px; background:linear-gradient(135deg,#111827,#374151); color:#fff; margin:14px 0 18px;}
+        .busy-hero-title {font-size:30px; font-weight:1000; letter-spacing:-.05em; line-height:1;}
+        .busy-hero-sub {font-size:13px; color:#d1d5db; margin-top:8px;}
+        .busy-user-chip {display:flex; align-items:center; justify-content:flex-end; gap:8px; font-size:13px; color:#111827; font-weight:700;}
+        .busy-avatar-sm {width:28px; height:28px; border-radius:999px; object-fit:cover; background:#e5e7eb;}
+        .busy-section-title {font-size:22px; font-weight:950; letter-spacing:-.03em; margin:14px 0 10px;}
+        .busy-page-subtitle {font-size:13px; color:#6b7280; margin-top:-5px; margin-bottom:12px;}
+        .busy-card {border:1px solid #e5e7eb; border-radius:18px; padding:14px; background:#fff; height:100%;}
         .busy-song-grid {display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;}
         .busy-song-card {border:1px solid #e5e7eb; border-radius:18px; padding:12px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.03);}
         .busy-cover-img {width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:14px; background:#f3f4f6; display:block;}
@@ -64,21 +86,31 @@ def inject_css():
         .busy-stats {font-size:12px; color:#374151; display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
         .busy-pill {display:inline-flex; align-items:center; border:1px solid #e5e7eb; border-radius:999px; padding:3px 8px; background:#f9fafb;}
         .busy-muted {color:#6b7280; font-size:12px;}
-        .busy-section-title {font-size:21px; font-weight:950; letter-spacing:-.02em; margin:12px 0 8px;}
         .busy-divider {height:1px; background:#e5e7eb; margin:16px 0;}
+
+        /* Menu buttons: flatter rectangular website menu, not pill tabs */
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"],
+        div[data-testid="stHorizontalBlock"] button[kind="primary"] {
+          border-radius:10px !important;
+          min-height:38px;
+          box-shadow:none !important;
+        }
+        button {font-weight:700 !important;}
+
         @media (max-width: 900px) {
-          .block-container {padding-left: .75rem; padding-right: .75rem;}
-          .busy-title {font-size:26px;}
+          .block-container {padding-left:.75rem; padding-right:.75rem;}
+          .busy-topbar {display:block;}
+          .busy-status {text-align:left; margin-top:10px;}
+          .busy-brand-title {font-size:20px;}
           .busy-song-grid {grid-template-columns: repeat(2, minmax(0, 1fr)); gap:10px;}
         }
         @media (max-width: 520px) {
-          .busy-song-grid {grid-template-columns: 1fr;}
+          .busy-song-grid {grid-template-columns:1fr;}
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
-
 
 def rerun():
     try:
@@ -88,33 +120,60 @@ def rerun():
 
 
 def render_header():
+    profile = ensure_profile() if is_logged_in() else {}
+    display_name = (profile or {}).get("display_name") or (profile or {}).get("email") or "Guest"
+    avatar_url = (profile or {}).get("avatar_url") or ""
+    status_text = "Online" if is_supabase_ready() else "Setup required"
+    auth_text = "Creator mode" if is_logged_in() else "Guest mode"
+    avatar_html = f'<img class="busy-avatar-sm" src="{html.escape(avatar_url)}">' if avatar_url else '<div class="busy-avatar-sm"></div>'
     st.markdown(
         f"""
-        <div class="busy-hero">
-          <div class="busy-title">{APP_TITLE}</div>
-          <div class="busy-subtitle">사용자 업로드 음원 기반 차트 · MP3 + 앨범 이미지 · 앱 내부 재생수/좋아요/댓글 반영</div>
+        <div class="busy-topbar">
+          <div class="busy-brand">
+            <div class="busy-logo">B</div>
+            <div>
+              <div class="busy-brand-title">Busy Chart</div>
+              <div class="busy-brand-sub">v1.0</div>
+            </div>
+          </div>
+          <div class="busy-status">{status_text}<br>{auth_text}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    left, mid, right = st.columns([1.4, 1.4, 1.0], gap="small")
-    with left:
+
+    nav_col, account_col = st.columns([4.8, 1.8], gap="medium")
+    with nav_col:
+        render_nav_buttons()
+    with account_col:
         if is_logged_in():
-            profile = ensure_profile() or {}
-            st.caption(f"로그인됨: {profile.get('display_name') or profile.get('email') or 'Busy User'}")
+            if hasattr(st, "popover"):
+                with st.popover(f"👤 {display_name}", use_container_width=True):
+                    st.markdown(f"<div class='busy-user-chip'>{avatar_html}<span>{html.escape(display_name)}</span></div>", unsafe_allow_html=True)
+                    email = (profile or {}).get("email") or ""
+                    if email:
+                        st.caption(email)
+                    if st.button("프로필 수정", use_container_width=True):
+                        st.session_state["busy_nav"] = "Profile"
+                        rerun()
+                    if st.button("내 업로드 관리", use_container_width=True):
+                        st.session_state["busy_nav"] = "Manage"
+                        rerun()
+                    st.divider()
+                    if st.button("로그아웃", use_container_width=True):
+                        st.logout()
+            else:
+                if st.button(f"👤 {display_name}", use_container_width=True):
+                    st.session_state["busy_nav"] = "Profile"
+                    rerun()
+                if st.button("Logout", use_container_width=True):
+                    st.logout()
         else:
-            st.caption("비로그인 상태: 차트 감상, 재생/일시정지, 좋아요 가능 · 업로드/댓글은 로그인 필요")
-    with mid:
-        st.caption("서버 연결됨" if is_supabase_ready() else "서버 설정 필요: SUPABASE_URL / SERVICE_ROLE_KEY")
-    with right:
-        if not is_login_available():
-            st.caption("Streamlit 로그인 API 확인 필요")
-        elif is_logged_in():
-            if st.button("Logout", use_container_width=True):
-                st.logout()
-        else:
-            if st.button("Login with Google", use_container_width=True):
-                st.login()
+            if is_login_available():
+                if st.button("Login", use_container_width=True):
+                    st.login()
+            else:
+                st.caption("Login API unavailable")
 
 
 def format_date(value: str) -> str:
@@ -165,6 +224,12 @@ def render_song_card(song: Dict, rank: int, liked: bool):
 
 
 def render_chart():
+    st.markdown("""
+        <div class='busy-hero'>
+          <div class='busy-hero-title'>Discover uploaded tracks</div>
+          <div class='busy-hero-sub'>Fresh uploads, community likes, and real listening signals.</div>
+        </div>
+        """, unsafe_allow_html=True)
     st.markdown("<div class='busy-section-title'>Chart</div>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 1, 2])
     with c1:
@@ -174,7 +239,7 @@ def render_chart():
     order_map = {"Trending": "score", "New": "new", "Most Liked": "liked", "Most Played": "played"}
     songs = list_songs(limit=limit, order=order_map[order_label])
     if not songs:
-        st.info("아직 업로드된 곡이 없습니다. 로그인 후 업로드 페이지에서 첫 곡을 등록해보세요.")
+        st.markdown("<div class='busy-card busy-muted'>No tracks yet.</div>", unsafe_allow_html=True)
         return
     liked = liked_song_ids([str(s.get("id")) for s in songs])
     cols = st.columns(4)
@@ -250,33 +315,53 @@ def render_comments(song: Dict):
 
 
 def render_profile_page():
-    st.markdown("<div class='busy-section-title'>사용자 정보</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-section-title'>Profile</div>", unsafe_allow_html=True)
     if not is_logged_in():
         st.info("로그인이 필요합니다.")
         return
     profile = ensure_profile() or {}
-    left, right = st.columns([1, 2])
+    left, right = st.columns([1, 2.2], gap="large")
     with left:
         if profile.get("avatar_url"):
-            st.image(profile.get("avatar_url"), width=160)
+            st.image(profile.get("avatar_url"), width=180)
+        else:
+            st.markdown("<div class='busy-card busy-muted'>No avatar</div>", unsafe_allow_html=True)
+        if profile.get("email"):
+            st.caption(f"Email: {profile.get('email')}")
     with right:
         with st.form("profile_form"):
-            display_name = st.text_input("닉네임", value=profile.get("display_name") or "")
+            display_name = st.text_input("닉네임", value=profile.get("display_name") or "", max_chars=80)
+            bio = st.text_area("소개", value=profile.get("bio") or "", max_chars=500, placeholder="간단한 소개를 입력하세요.")
             avatar = st.file_uploader("아바타 이미지", type=["jpg", "jpeg", "png", "webp"])
-            submitted = st.form_submit_button("저장")
+            st.markdown("**외부 링크**")
+            suno_url = st.text_input("Suno 링크", value=profile.get("suno_url") or "", placeholder="https://suno.com/@...")
+            spotify_url = st.text_input("Spotify 링크", value=profile.get("spotify_url") or "", placeholder="https://open.spotify.com/artist/...")
+            youtube_url = st.text_input("YouTube 링크", value=profile.get("youtube_url") or "", placeholder="https://youtube.com/@...")
+            instagram_url = st.text_input("Instagram 링크", value=profile.get("instagram_url") or "", placeholder="https://instagram.com/...")
+            website_url = st.text_input("Website / Link hub", value=profile.get("website_url") or "", placeholder="https://...")
+            submitted = st.form_submit_button("프로필 저장")
             if submitted:
-                if update_profile(display_name, avatar):
+                if update_profile(
+                    display_name=display_name,
+                    avatar_file=avatar,
+                    bio=bio,
+                    suno_url=suno_url,
+                    spotify_url=spotify_url,
+                    youtube_url=youtube_url,
+                    instagram_url=instagram_url,
+                    website_url=website_url,
+                ):
                     st.success("프로필이 저장되었습니다.")
                     rerun()
 
 
 def render_upload_page():
-    st.markdown("<div class='busy-section-title'>업로드</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-section-title'>Upload</div>", unsafe_allow_html=True)
     if not is_logged_in():
         st.info("업로드는 로그인 후 사용할 수 있습니다.")
         return
     ensure_profile()
-    st.caption(f"현재 프로토타입은 MP3 최대 {MAX_AUDIO_MB}MB, 앨범 이미지는 JPG/PNG/WEBP 최대 {MAX_COVER_MB}MB만 지원합니다.")
+    st.markdown(f"<div class='busy-page-subtitle'>MP3 up to {MAX_AUDIO_MB}MB · Cover image up to {MAX_COVER_MB}MB</div>", unsafe_allow_html=True)
     with st.form("upload_form"):
         title = st.text_input("노래 제목 *", max_chars=160)
         style_tags = st.text_input("스타일태그 / 장르", placeholder="예: hard psy, vocal chop, synth-pop", max_chars=300)
@@ -285,7 +370,7 @@ def render_upload_page():
         audio = st.file_uploader("음원 파일 *", type=["mp3"])
         cover = st.file_uploader("앨범 이미지 *", type=["jpg", "jpeg", "png", "webp"])
         comments_enabled = st.checkbox("댓글 허용", value=True)
-        rights = st.checkbox("나는 이 음원을 업로드하고 공개/공유/재생할 권리를 보유하고 있거나 필요한 허가를 받았으며, 제3자의 권리 및 외부 플랫폼 약관을 침해하지 않음을 확인합니다.")
+        rights = st.checkbox("업로드 및 공개 재생 권한을 확인합니다.")
         submitted = st.form_submit_button("곡 등록")
         if submitted:
             if not rights:
@@ -295,21 +380,21 @@ def render_upload_page():
             else:
                 song_id = create_song(title, style_tags, lyrics, audio, cover, comments_enabled, description)
                 if song_id:
-                    st.success("곡이 등록되었습니다. 차트에 즉시 반영됩니다.")
+                    st.success("업로드 완료")
                     st.session_state["selected_song_id"] = song_id
 
 
 def render_manage_page():
-    st.markdown("<div class='busy-section-title'>업로드곡 관리</div>", unsafe_allow_html=True)
+    st.markdown("<div class='busy-section-title'>My Uploads</div>", unsafe_allow_html=True)
     if not is_logged_in():
         st.info("로그인이 필요합니다.")
         return
     songs = list_my_songs()
-    if st.button("+ 새 곡 업로드 페이지로 이동"):
+    if st.button("+ New Upload"):
         st.session_state["busy_nav"] = "Upload"
         rerun()
     if not songs:
-        st.info("아직 업로드한 곡이 없습니다.")
+        st.markdown("<div class='busy-card busy-muted'>No uploads yet.</div>", unsafe_allow_html=True)
         return
     for song in songs:
         with st.expander(f"{song.get('title')} · {song.get('visibility')} · {song.get('status')}"):
@@ -348,23 +433,42 @@ def render_manage_page():
                         rerun()
 
 
-def render_nav():
-    public_tabs = ["Chart"]
-    private_tabs = ["Profile", "Upload", "Manage"] if is_logged_in() else []
-    tabs = public_tabs + private_tabs
+def nav_items() -> List[str]:
+    items = ["Chart"]
+    if is_logged_in():
+        items += ["Upload", "Manage"]
+    return items
+
+
+def render_nav_buttons():
+    items = nav_items()
+    labels = {"Chart": "차트", "Upload": "업로드", "Manage": "업로드 관리"}
     current = st.session_state.get("busy_nav", "Chart")
-    if current not in tabs:
+    if current not in items:
         current = "Chart"
-    selected = st.radio("Navigation", tabs, index=tabs.index(current), horizontal=True, label_visibility="collapsed")
-    st.session_state["busy_nav"] = selected
-    return selected
+    cols = st.columns(len(items), gap="small")
+    for item, col in zip(items, cols):
+        with col:
+            button_type = "primary" if item == current else "secondary"
+            if st.button(labels.get(item, item), key=f"nav_{item}", type=button_type, use_container_width=True):
+                st.session_state["busy_nav"] = item
+                rerun()
+
+
+def render_nav():
+    current = st.session_state.get("busy_nav", "Chart")
+    items = nav_items()
+    if current not in items:
+        current = "Chart"
+        st.session_state["busy_nav"] = current
+    return current
 
 
 def main():
     inject_css()
     render_header()
     if not is_supabase_ready():
-        st.error("Supabase 연결이 필요합니다. Streamlit Secrets에 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY를 설정하고, supabase/busy_chart_v1_schema.sql을 실행하세요.")
+        st.error("Server setup required.")
         return
     nav = render_nav()
     if nav == "Chart":
@@ -375,10 +479,7 @@ def main():
         render_upload_page()
     elif nav == "Manage":
         render_manage_page()
-    err = st.session_state.get("busy_last_error")
-    if err:
-        with st.expander("최근 서버 메시지", expanded=False):
-            st.code(str(err)[:2000])
+    # Keep operational errors out of the public UI.
 
 
 if __name__ == "__main__":
