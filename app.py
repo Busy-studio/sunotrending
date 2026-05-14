@@ -59,72 +59,88 @@ def inject_css():
         .stDeployButton {display:none !important;}
 
         :root {
-          --busy-bg:#fbf8ff;
-          --busy-card:#ffffff;
-          --busy-line:#eadff7;
-          --busy-text:#2d2540;
-          --busy-muted:#7f7196;
-          --busy-lavender:#d9ccff;
-          --busy-mint:#c9f1e7;
-          --busy-peach:#ffd9c8;
-          --busy-sky:#cfe9ff;
-          --busy-accent:#8b6eea;
+          --busy-bg:#f7f3ec;
+          --busy-card:#fffdf8;
+          --busy-card-2:#fbf7ef;
+          --busy-line:#e7ddd0;
+          --busy-text:#23211f;
+          --busy-muted:#7b7167;
+          --busy-accent:#6f7f63;
+          --busy-accent-2:#9a7665;
+          --busy-accent-3:#6d7690;
+          --busy-soft:#efe6db;
+          --busy-hover:#f1eadf;
         }
         html, body, [data-testid="stAppViewContainer"] {
           background:
-            radial-gradient(circle at top left, rgba(217,204,255,.48), transparent 34%),
-            radial-gradient(circle at top right, rgba(201,241,231,.55), transparent 32%),
-            linear-gradient(180deg, #fffbfe 0%, #f8fbff 100%) !important;
+            radial-gradient(circle at 8% 0%, rgba(225,214,201,.72), transparent 30%),
+            radial-gradient(circle at 92% 8%, rgba(206,217,201,.55), transparent 28%),
+            linear-gradient(180deg, #faf7f1 0%, #f5f1e9 52%, #f8f6f1 100%) !important;
           color:var(--busy-text);
         }
-        .block-container {padding-top: 1.05rem; padding-bottom: 3rem; max-width: 1440px;}
+        .block-container {padding-top: .9rem; padding-bottom: 3rem; max-width: 1440px;}
         .busy-topbar {
-          display:flex; align-items:center; justify-content:space-between; gap:16px;
-          border:1px solid rgba(234,223,247,.95); border-radius:20px; padding:12px 14px;
-          background:rgba(255,255,255,.78); backdrop-filter:blur(16px);
-          box-shadow:0 14px 40px rgba(93,75,137,.08); margin-bottom:14px;
+          display:flex; align-items:center; justify-content:space-between; gap:18px;
+          border:1px solid rgba(231,221,208,.95); border-radius:18px; padding:12px 14px;
+          background:rgba(255,253,248,.82); backdrop-filter:blur(18px);
+          box-shadow:0 16px 42px rgba(72,60,47,.08); margin-bottom:14px;
         }
-        .busy-brand {display:flex; align-items:center; gap:10px;}
-        .busy-logo {width:38px; height:38px; border-radius:14px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#b8a7ff,#9de8d7); color:#2d2540; font-weight:1000; box-shadow:0 8px 20px rgba(139,110,234,.18);}
-        .busy-brand-title {font-size:22px; font-weight:1000; letter-spacing:-.04em; line-height:1; color:#2d2540;}
+        .busy-brand {display:flex; align-items:center; gap:11px;}
+        .busy-logo {width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#e7ddd0,#cfdac9); color:#2c2925; font-weight:1000; box-shadow:0 8px 20px rgba(88,76,61,.13);}
+        .busy-brand-title {font-size:22px; font-weight:1000; letter-spacing:-.04em; line-height:1; color:#24211e;}
         .busy-brand-sub {font-size:12px; color:var(--busy-muted); margin-top:4px;}
         .busy-status {font-size:12px; color:var(--busy-muted); text-align:right;}
-        .busy-hero {border:1px solid rgba(234,223,247,.95); border-radius:26px; padding:24px; background:linear-gradient(135deg,#f3edff 0%,#e9fbf6 50%,#fff1ea 100%); color:#2d2540; margin:14px 0 18px; box-shadow:0 18px 50px rgba(93,75,137,.08);}
+        .busy-hero {border:1px solid rgba(231,221,208,.95); border-radius:24px; padding:24px; background:linear-gradient(135deg,#fffdf8 0%,#f1eadf 48%,#e7eee2 100%); color:#24211e; margin:14px 0 18px; box-shadow:0 18px 50px rgba(72,60,47,.075);}
         .busy-hero-title {font-size:30px; font-weight:1000; letter-spacing:-.05em; line-height:1;}
-        .busy-hero-sub {font-size:13px; color:#766a8f; margin-top:8px;}
-        .busy-user-chip {display:flex; align-items:center; justify-content:flex-end; gap:8px; font-size:13px; color:#2d2540; font-weight:800;}
-        .busy-avatar-sm {width:28px; height:28px; border-radius:999px; object-fit:cover; background:#efe9fb;}
-        .busy-section-title {font-size:22px; font-weight:950; letter-spacing:-.03em; margin:14px 0 10px; color:#2d2540;}
+        .busy-hero-sub {font-size:13px; color:#766c61; margin-top:8px;}
+        .busy-user-chip {display:flex; align-items:center; justify-content:flex-end; gap:8px; font-size:13px; color:#24211e; font-weight:800;}
+        .busy-avatar-sm {width:28px; height:28px; border-radius:999px; object-fit:cover; background:#efe6db;}
+        .busy-section-title {font-size:22px; font-weight:950; letter-spacing:-.03em; margin:14px 0 10px; color:#24211e;}
         .busy-page-subtitle {font-size:13px; color:var(--busy-muted); margin-top:-5px; margin-bottom:12px;}
-        .busy-card {border:1px solid rgba(234,223,247,.95); border-radius:20px; padding:15px; background:rgba(255,255,255,.82); height:100%; box-shadow:0 8px 24px rgba(93,75,137,.055);}
+        .busy-card {border:1px solid rgba(231,221,208,.95); border-radius:18px; padding:15px; background:rgba(255,253,248,.86); height:100%; box-shadow:0 8px 24px rgba(72,60,47,.055);}
         .busy-song-grid {display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px;}
-        .busy-song-card {border:1px solid rgba(234,223,247,.95); border-radius:22px; padding:12px; background:rgba(255,255,255,.86); box-shadow:0 10px 26px rgba(93,75,137,.07);}
-        .busy-cover-img {width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:17px; background:#f5f0ff; display:block;}
-        .busy-song-title {font-weight:900; font-size:15px; margin-top:9px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#2d2540;}
+        .busy-song-card {border:1px solid rgba(231,221,208,.95); border-radius:20px; padding:12px; background:rgba(255,253,248,.88); box-shadow:0 10px 26px rgba(72,60,47,.07);}
+        .busy-cover-img {width:100%; aspect-ratio:1/1; object-fit:cover; border-radius:16px; background:#f2ece2; display:block;}
+        .busy-song-title {font-weight:900; font-size:15px; margin-top:9px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#24211e;}
         .busy-song-meta {font-size:12px; color:var(--busy-muted); line-height:1.35; margin-top:3px; min-height:32px;}
-        .busy-stats {font-size:12px; color:#55496e; display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
-        .busy-pill {display:inline-flex; align-items:center; border:1px solid #eadff7; border-radius:999px; padding:3px 8px; background:#fbf8ff;}
+        .busy-stats {font-size:12px; color:#51483f; display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+        .busy-pill {display:inline-flex; align-items:center; border:1px solid #e7ddd0; border-radius:999px; padding:3px 8px; background:#fbf7ef;}
         .busy-muted {color:var(--busy-muted); font-size:12px;}
-        .busy-divider {height:1px; background:#eadff7; margin:16px 0;}
+        .busy-divider {height:1px; background:#e7ddd0; margin:16px 0;}
 
         /* Website-like menu buttons */
         div[data-testid="stHorizontalBlock"] button[kind="secondary"],
         div[data-testid="stHorizontalBlock"] button[kind="primary"] {
-          border-radius:12px !important;
+          border-radius:10px !important;
           min-height:38px;
           box-shadow:none !important;
-          border:1px solid #eadff7 !important;
+          border:1px solid #e4d8c8 !important;
         }
         div[data-testid="stHorizontalBlock"] button[kind="primary"] {
-          background:linear-gradient(135deg,#d9ccff,#c9f1e7) !important;
-          color:#2d2540 !important;
+          background:#2f3a2f !important;
+          color:#fffdf8 !important;
         }
         div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
-          background:rgba(255,255,255,.72) !important;
-          color:#594d72 !important;
+          background:rgba(255,253,248,.72) !important;
+          color:#5a5148 !important;
+        }
+        div[data-testid="stHorizontalBlock"] button:hover {
+          border-color:#c9bba8 !important;
+          background:var(--busy-hover) !important;
+          color:#24211e !important;
         }
         button {font-weight:750 !important;}
 
+        [data-testid="stPopover"] button {
+          border-radius:10px !important;
+          border:1px solid #e4d8c8 !important;
+          background:rgba(255,253,248,.72) !important;
+          color:#5a5148 !important;
+        }
+        [data-testid="stPopover"] button:hover {
+          background:var(--busy-hover) !important;
+          color:#24211e !important;
+        }
         @media (max-width: 900px) {
           .block-container {padding-left:.75rem; padding-right:.75rem;}
           .busy-topbar {display:block;}
@@ -492,21 +508,51 @@ def nav_items() -> List[str]:
 
 
 def render_nav_buttons():
-    items = nav_items()
-    profile = ensure_profile() if is_logged_in() else {}
-    if is_logged_in():
-        my_label = (profile or {}).get("display_name") or "내 아이디"
-    else:
-        my_label = "로그인"
-    labels = {"Chart": "차트", "Playlists": "플레이리스트", "AI": "AI 큐레이션", "My": my_label}
+    items = ["Chart", "Playlists", "AI"]
     current = st.session_state.get("busy_nav", "Chart")
-    visible_current = current if current in items else "My" if current in ["Profile", "Upload", "Manage"] else "Chart"
-    cols = st.columns(len(items), gap="small")
-    for item, col in zip(items, cols):
+    labels = {"Chart": "차트", "Playlists": "플레이리스트", "AI": "AI 큐레이션"}
+    visible_current = current if current in items else "My" if current in ["My", "Profile", "Upload", "Manage"] else "Chart"
+
+    cols = st.columns([1, 1, 1, 1.15], gap="small")
+    for item, col in zip(items, cols[:3]):
         with col:
             button_type = "primary" if item == visible_current else "secondary"
             if st.button(labels.get(item, item), key=f"nav_{item}", type=button_type, use_container_width=True):
                 st.session_state["busy_nav"] = item
+                rerun()
+
+    with cols[3]:
+        if is_logged_in():
+            profile = ensure_profile() or {}
+            my_label = (profile.get("display_name") or "내 아이디").strip()
+            if len(my_label) > 14:
+                my_label = my_label[:13] + "…"
+            pop_label = f"{my_label} ▾"
+            try:
+                with st.popover(pop_label, use_container_width=True):
+                    if st.button("내 계정", key="my_menu_account", use_container_width=True, type="primary" if visible_current == "My" else "secondary"):
+                        st.session_state["busy_nav"] = "My"
+                        rerun()
+                    if st.button("프로필 수정", key="my_menu_profile", use_container_width=True):
+                        st.session_state["busy_nav"] = "Profile"
+                        rerun()
+                    if st.button("새 곡 업로드", key="my_menu_upload", use_container_width=True):
+                        st.session_state["busy_nav"] = "Upload"
+                        rerun()
+                    if st.button("업로드 관리", key="my_menu_manage", use_container_width=True):
+                        st.session_state["busy_nav"] = "Manage"
+                        rerun()
+                    st.divider()
+                    if st.button("로그아웃", key="my_menu_logout", use_container_width=True):
+                        st.logout()
+            except Exception:
+                # Fallback for older Streamlit versions without st.popover
+                if st.button(pop_label, key="nav_My", type="primary" if visible_current == "My" else "secondary", use_container_width=True):
+                    st.session_state["busy_nav"] = "My"
+                    rerun()
+        else:
+            if st.button("로그인", key="nav_login", type="primary" if visible_current == "My" else "secondary", use_container_width=True):
+                st.session_state["busy_nav"] = "My"
                 rerun()
 
 
