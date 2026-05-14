@@ -46,14 +46,62 @@ def is_valid_suno_link(url):
         return False, f"링크 확인 중 오류: {e}"
 
 
-def queue_manual_song_url(song_url):
-    if not GITHUB_ACTION_TOKEN:
-        return False, "GITHUB_ACTION_TOKEN이 Streamlit secrets에 없습니다."
+def queue_manual_song_url_supabase(clean_url):
+    """Queue a manual song directly in Supabase when configured.
 
+    This is the preferred path after the SQL migration. It keeps manual additions
+    in public.manual_song_queue instead of writing to the old data branch CSV.
+    """
+    try:
+        from app_modules.supabase_store import get_supabase_client
+        sb = get_supabase_client()
+    except Exception:
+        sb = None
+
+    if not sb:
+        return None
+
+    try:
+        existing = (
+            sb.table("manual_song_queue")
+            .select("request_id,status,url")
+            .eq("url", clean_url)
+            .in_("status", ["pending", "queued", ""])
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return True, "이미 수집 대기열에 있는 링크입니다. 다음 업데이트 때 반영됩니다."
+
+        row = {
+            "request_id": str(uuid.uuid4()),
+            "submitted_at": pd.Timestamp.now(tz="UTC").isoformat(),
+            "url": clean_url,
+            "status": "pending",
+            "song_id": "",
+            "title": "",
+            "processed_at": "",
+            "error": "",
+        }
+        sb.table("manual_song_queue").insert(row).execute()
+        return True, "곡 수집 대기열에 추가했습니다. 다음 업데이트 때 자동 반영됩니다."
+    except Exception as exc:
+        return False, f"서버 queue 저장 중 오류: {exc}"
+
+
+def queue_manual_song_url(song_url):
     clean_url = str(song_url or "").strip()
 
     if not clean_url:
         return False, "Suno 링크를 입력하세요."
+
+    # Prefer Supabase queue after migration. Return None only when Supabase is not configured.
+    supabase_result = queue_manual_song_url_supabase(clean_url)
+    if supabase_result is not None:
+        return supabase_result
+
+    if not GITHUB_ACTION_TOKEN:
+        return False, "서버 queue 또는 GITHUB_ACTION_TOKEN 설정이 필요합니다."
 
     api_url = (
         f"https://api.github.com/repos/"

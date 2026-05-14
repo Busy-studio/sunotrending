@@ -31,6 +31,8 @@ RANK_HISTORY_PATH = "data/suno_rank_history.csv"
 
 REQUEST_SLEEP_SECONDS = float(os.getenv("REQUEST_SLEEP_SECONDS", "1.2"))
 MAX_UPDATE_ROWS = int(os.getenv("MAX_UPDATE_ROWS", "1000"))
+FETCH_NEW_SONGS = os.getenv("FETCH_NEW_SONGS", "1").strip().lower() not in {"0", "false", "no", "off"}
+KEEP_EXPIRED_SONGS_IN_DB = os.getenv("KEEP_EXPIRED_SONGS_IN_DB", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 # 무로그인 new_songs는 page_size 50까지 가능, 100은 서버가 거절함
 NEW_SONGS_PAGES = int(os.getenv("NEW_SONGS_PAGES", "3"))
@@ -703,15 +705,20 @@ def add_new_songs_to_db(db, songs):
 
 
 def choose_rows_to_update(db):
+    """Pick rows for detail refresh using rotation, not only newest-created rows.
+
+    Priority:
+    1. rows missing created_at, because they may be excluded from ranking otherwise
+    2. rows with missing/old last_checked_at
+    3. newer created_at as tie breaker
+
+    This prevents older-but-still-eligible songs from being starved by the newest rows.
+    """
     if db.empty:
         return db
 
     out = db.copy()
 
-    # 핵심 수정:
-    # 예전 로직은 created_at 최신순으로 head(MAX_UPDATE_ROWS)만 잡아서
-    # active DB가 MAX_UPDATE_ROWS보다 커지면 오래된 active 곡이 영구적으로 업데이트되지 않았다.
-    # 이제는 last_checked_at이 비어 있거나 오래된 곡을 우선 갱신해 전체 active 곡을 순환 업데이트한다.
     if "created_at" in out.columns:
         out["created_at_dt"] = pd.to_datetime(out["created_at"], errors="coerce", utc=True)
     else:
@@ -722,35 +729,30 @@ def choose_rows_to_update(db):
     else:
         out["last_checked_at_dt"] = pd.NaT
 
-    missing_created = out["created_at_dt"].isna()
-    never_checked = out["last_checked_at_dt"].isna()
+    out["missing_created_priority"] = out["created_at_dt"].isna().astype(int)
+    out["missing_checked_priority"] = out["last_checked_at_dt"].isna().astype(int)
 
-    # 1) created_at missing: 상세 재조회로 복구 가능성이 있으므로 최우선
-    # 2) last_checked_at missing/oldest: 업데이트 누락 방지
-    # 3) 같은 조건에서는 최신 생성곡 우선
-    out["_missing_created_priority"] = (~missing_created).astype(int)
+    # Older last_checked_at should be refreshed first. Missing checked rows are sorted first by priority.
     out = out.sort_values(
-        by=["_missing_created_priority", "last_checked_at_dt", "created_at_dt"],
-        ascending=[True, True, False],
+        by=["missing_created_priority", "missing_checked_priority", "last_checked_at_dt", "created_at_dt"],
+        ascending=[False, False, True, False],
         na_position="first",
     )
 
     print(
         f"[choose_update] max={MAX_UPDATE_ROWS}, "
-        f"missing_created={int(missing_created.sum())}, "
-        f"never_checked={int(never_checked.sum())}, "
+        f"missing_created={int(out['created_at_dt'].isna().sum())}, "
+        f"missing_last_checked={int(out['last_checked_at_dt'].isna().sum())}, "
         f"db_rows={len(out)}"
     )
 
-    return (
-        out.head(MAX_UPDATE_ROWS)
-        .drop(columns=[
-            "created_at_dt",
-            "last_checked_at_dt",
-            "_missing_created_priority",
-        ], errors="ignore")
-        .copy()
-    )
+    return out.head(MAX_UPDATE_ROWS).drop(
+        columns=[
+            "created_at_dt", "last_checked_at_dt",
+            "missing_created_priority", "missing_checked_priority",
+        ],
+        errors="ignore",
+    ).copy()
 
 
 def restore_created_at_from_history(db):
@@ -1041,6 +1043,10 @@ def archive_expired_songs(expired_db, scored_db):
 
 
 def prune_old_songs_and_history(final_db):
+    if KEEP_EXPIRED_SONGS_IN_DB:
+        print("[prune] KEEP_EXPIRED_SONGS_IN_DB=1, keeping all songs in suno_songs; ranking eligibility is handled by payload/filter logic")
+        return final_db
+
     if SONG_RETENTION_DAYS <= 0:
         return final_db
 
@@ -1131,12 +1137,18 @@ def main():
 
     print(f"[load] db_rows={len(db)}")
 
-    songs, logs = fetch_public_new_songs()
+    if FETCH_NEW_SONGS:
+        songs, logs = fetch_public_new_songs()
 
-    for line in logs:
-        print(line)
+        for line in logs:
+            print(line)
 
-    db, added_count, duplicate_count = add_new_songs_to_db(db, songs)
+        db, added_count, duplicate_count = add_new_songs_to_db(db, songs)
+    else:
+        songs = []
+        added_count = 0
+        duplicate_count = 0
+        print("[new_songs] FETCH_NEW_SONGS=0, skipping new song discovery")
 
     # 기존 DB에 created_at이 비어 있어도 history에는 남아 있을 수 있으므로 업데이트 대상 선정 전에 복구한다.
     db = restore_created_at_from_history(db)

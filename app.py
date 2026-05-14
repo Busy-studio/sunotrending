@@ -15,6 +15,7 @@ from app_modules.data_loader import (
 )
 from app_modules.manual_queue import is_valid_suno_link, queue_manual_song_url
 from app_modules.player_component import render_player_ranking_html
+from app_modules.supabase_chart_loader import load_supabase_app_payload
 from app_modules.supabase_store import (
     ensure_playlist_cloud_token,
     get_current_user_profile,
@@ -933,20 +934,30 @@ def build_cloud_playlist_config():
 st.title("Suno Chart v1.05")
 render_auth_status_bar()
 
-try:
-    sync_remote_data_files(DATA_RAW_BASE_URL, GITHUB_RAW_TOKEN)
-except Exception as e:
-    st.warning(f"Remote data sync failed. Using existing local data files. Error: {e}")
+# Prefer Supabase app_payloads.latest. Keep the old encrypted ZIP payload as a fallback
+# during migration so the public app does not break if Supabase is empty/unavailable.
+payload_source = "supabase"
+payload, payload_error = load_supabase_app_payload("latest")
 
-payload_fingerprint = file_fingerprint(APP_PAYLOAD_ZIP_PATH)
-payload, payload_error = load_app_payload(payload_fingerprint)
+if not payload:
+    payload_source = "zip_fallback"
+    try:
+        sync_remote_data_files(DATA_RAW_BASE_URL, GITHUB_RAW_TOKEN)
+    except Exception as e:
+        st.warning(f"Remote data sync failed. Using existing local data files. Error: {e}")
+
+    payload_fingerprint = file_fingerprint(APP_PAYLOAD_ZIP_PATH)
+    payload, payload_error = load_app_payload(payload_fingerprint)
 
 if payload:
     meta = payload.get("meta", {})
     tabs_payload = payload.get("tabs", {})
 
     last_checked_txt = meta.get("last_checked_at", "-") or "-"
-    st.caption(f"마지막 업데이트 {last_checked_txt}")
+    if payload_source == "supabase":
+        st.caption(f"마지막 업데이트 {last_checked_txt} · 데이터 소스: 서버")
+    else:
+        st.caption(f"마지막 업데이트 {last_checked_txt} · 데이터 소스: ZIP fallback")
     st.divider()
 
     tabs_order = payload.get("tabs_order") or ["new_songs", "top200", "rain_crew"]
