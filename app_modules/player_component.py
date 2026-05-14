@@ -937,19 +937,55 @@ def render_player_ranking_html(
     @media (max-width: 980px) {
         .app-shell {
             grid-template-columns: 1fr;
-            height: auto;
+            height: 1220px;
             min-height: 0;
         }
 
+        /* 모바일에서는 차트 접근성이 우선이다. 풀 플레이어는 숨기고,
+           앨범 이미지 클릭으로 단일곡 재생/일시정지는 유지한다. */
         .player-panel {
-            position: relative;
-            height: 1180px;
-            max-height: none;
+            display: none;
         }
 
-        .playlist { min-height: 180px; }
-        .lyrics-panel { height: 180px; }
+        .ranking-panel {
+            height: 100%;
+            min-height: 0;
+        }
+
+        .ranking-topbar {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+            padding: 10px;
+        }
+
+        .rank-view-tabs {
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+
+        .rank-view-tab {
+            padding: 7px 10px;
+            font-size: 12px;
+        }
+
+        .ranking-title { font-size: 15px; }
+        .ranking-sub { font-size: 11px; }
+        .search-input { min-width: 0; width: 100%; }
+
+        table.song-table {
+            min-width: 980px;
+            font-size: 13px;
+        }
+
         .score-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 520px) {
+        .app-shell { height: 1180px; }
+        .table-wrap { -webkit-overflow-scrolling: touch; }
+        .cover-btn, .cover { width: 50px; height: 50px; }
+        .song-table th, .song-table td { padding: 7px 6px; }
     }
     </style>
 
@@ -2818,7 +2854,7 @@ function cycleSort(key) {
 
     components.html(
         full_html,
-        height=1220,
+        height=1240,
         scrolling=False,
     )
 

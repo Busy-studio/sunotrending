@@ -7,7 +7,7 @@
 
 create table if not exists public.app_payloads (
   key text primary key,
-  payload_json text,
+  payload_json jsonb,
   updated_at timestamptz default now()
 );
 
@@ -16,7 +16,7 @@ create table if not exists public.suno_songs (id text);
 create table if not exists public.suno_song_history (id text);
 create table if not exists public.suno_rank_history (id text);
 create table if not exists public.manual_song_queue (request_id text);
-create table if not exists public.suno_song_archive (id text);
+-- archive table is optional/legacy in Supabase mode. Songs stay in suno_songs.
 
 -- 운영 중 스크립트가 쓰는 주요 컬럼 보강. 전부 text라 CSV import/업데이트 타입 오류를 피합니다.
 alter table public.suno_songs
