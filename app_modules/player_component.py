@@ -64,16 +64,16 @@ def render_player_ranking_html(
 
     .app-shell {
         display: grid;
-        grid-template-columns: minmax(520px, 1fr) 330px 300px;
-        gap: 16px;
+        grid-template-columns: minmax(390px, 1fr) minmax(250px, 310px) minmax(190px, 250px);
+        gap: 12px;
         width: 100%;
-        height: 1080px;
+        height: 1060px;
         min-height: 0;
         align-items: stretch;
     }
 
     .app-shell.public-mode {
-        grid-template-columns: minmax(520px, 1fr) 330px 300px;
+        grid-template-columns: minmax(390px, 1fr) minmax(250px, 310px) minmax(190px, 250px);
     }
 
     .app-shell.public-mode .queue-panel {
@@ -88,7 +88,7 @@ def render_player_ranking_html(
         border: 1px solid var(--line);
         box-shadow: 0 14px 42px rgba(72,60,47,.07);
         border-radius: 18px;
-        padding: 14px;
+        padding: 10px;
         height: 100%;
         overflow: hidden;
         display: flex;
@@ -115,6 +115,7 @@ def render_player_ranking_html(
     .now-cover-wrap {
         width: 100%;
         aspect-ratio: 1 / 1;
+        max-height: 250px;
         border-radius: 18px;
         overflow: hidden;
         background: #e5e7eb;
@@ -135,7 +136,7 @@ def render_player_ranking_html(
         display: grid;
         place-items: center;
         color: var(--muted);
-        font-size: 13px;
+        font-size: 12.5px;
     }
 
     .now-title {
@@ -187,7 +188,8 @@ def render_player_ranking_html(
         background: #ffffff;
         border-radius: 12px;
         padding: 10px;
-        height: 210px;
+        flex: 1;
+        min-height: 260px;
         overflow-y: auto;
         white-space: pre-wrap;
         font-size: 12px;
@@ -238,7 +240,7 @@ def render_player_ranking_html(
         border-color: var(--accent);
         min-width: 46px;
         height: 46px;
-        font-size: 16px;
+        font-size: 14px;
     }
 
     .ctrl-btn:hover { border-color: var(--accent); }
@@ -326,7 +328,7 @@ def render_player_ranking_html(
         background: #ffffff;
         color: var(--text);
         border-radius: 999px;
-        padding: 6px 9px;
+        padding: 5px 7px;
         cursor: pointer;
         font-size: 11px;
         font-weight: 850;
@@ -469,7 +471,7 @@ def render_player_ranking_html(
         grid-template-columns: 34px 1fr 28px;
         gap: 8px;
         align-items: center;
-        padding: 7px 6px;
+        padding: 7px 5px;
         border-bottom: 1px solid var(--line);
         cursor: pointer;
     }
@@ -611,7 +613,7 @@ def render_player_ranking_html(
 
     .song-table th {
         text-align: left;
-        padding: 10px 6px;
+        padding: 9px 5px;
         border-bottom: 1px solid var(--line-dark);
         background: var(--soft);
         position: sticky;
@@ -622,7 +624,7 @@ def render_player_ranking_html(
     }
 
     .song-table td {
-        padding: 7px 6px;
+        padding: 7px 5px;
         border-bottom: 1px solid var(--line);
         vertical-align: middle;
         color: var(--text);
@@ -672,15 +674,15 @@ def render_player_ranking_html(
         background: transparent;
         cursor: pointer;
         position: relative;
-        width: 56px;
-        height: 56px;
+        width: 48px;
+        height: 48px;
         display: block;
         flex-shrink: 0;
     }
 
     .cover {
-        width: 56px;
-        height: 56px;
+        width: 48px;
+        height: 48px;
         object-fit: cover;
         border-radius: 10px;
         background: #e5e7eb;
@@ -769,7 +771,7 @@ def render_player_ranking_html(
         display: inline-block;
         flex: 0 1 auto;
         min-width: 0;
-        max-width: 84px;
+        max-width: 70px;
         border: 1px solid var(--line);
         background: #f9fafb;
         color: #374151;
@@ -819,17 +821,38 @@ def render_player_ranking_html(
     }
 
 
+
+    .stat-cell {
+        text-align: right;
+        white-space: nowrap;
+        min-width: 0;
+    }
+
+    .stat-stack {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        font-size: 11px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .mini-stat-line {
+        white-space: nowrap;
+    }
+
     .like-btn {
         border: 1px solid var(--line-dark);
         background: #ffffff;
         color: var(--text);
         border-radius: 999px;
-        padding: 6px 9px;
+        padding: 5px 7px;
         cursor: pointer;
         font-size: 12px;
         font-weight: 900;
         white-space: nowrap;
-        min-width: 58px;
+        min-width: 54px;
     }
     .like-btn.active {
         background: #e7eee2;
@@ -1009,15 +1032,13 @@ def render_player_ranking_html(
                 <table class="song-table">
                     <thead>
                         <tr>
-                            <th class="select-col" style="width:42px; text-align:center;">＋</th>
-                            <th class="sortable" data-sort-key="rank" style="width:42px; text-align:right;">순위<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="has_image" style="width:64px;">앨범<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="title" style="width:260px;">곡 정보<span class="sort-indicator"></span></th>
-                            <th style="width:150px;">스타일</th>
-                            <th class="sortable" data-sort-key="play_count" style="width:66px; text-align:right;">재생<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="upvote_count" style="width:78px; text-align:center;">좋아요<span class="sort-indicator"></span></th>
-                            <th class="sortable" data-sort-key="comment_count" style="width:58px; text-align:right;">댓글<span class="sort-indicator"></span></th>
-                            <th style="width:78px; text-align:center;">상세</th>
+                            <th class="select-col" style="width:34px; text-align:center;">＋</th>
+                            <th class="sortable" data-sort-key="rank" style="width:36px; text-align:right;">순위<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="has_image" style="width:54px;">앨범<span class="sort-indicator"></span></th>
+                            <th class="sortable" data-sort-key="title" style="width:190px;">곡 정보<span class="sort-indicator"></span></th>
+                            <th style="width:82px;">스타일</th>
+                            <th class="sortable" data-sort-key="upvote_count" style="width:74px; text-align:right;">반응<span class="sort-indicator"></span></th>
+                            <th style="width:52px; text-align:center;">상세</th>
                         </tr>
                     </thead>
                     <tbody id="songTableBody"></tbody>
@@ -1038,7 +1059,6 @@ def render_player_ranking_html(
             <div class="now-creator" id="nowCreator">앨범 이미지나 체크 버튼을 누르면 추가됩니다.</div>
             <div class="now-style-tags" id="nowStyleTags"></div>
 
-            <div class="lyrics-panel empty" id="lyricsPanel">가사/프롬프트 정보가 있으면 여기에 표시됩니다.</div>
 
             <div class="progress-wrap">
                 <input id="progress" type="range" min="0" max="1000" value="0">
@@ -1073,6 +1093,8 @@ def render_player_ranking_html(
                 <button class="loudness-btn" id="loudnessNormalizeBtn" title="분석된 LUFS/True Peak 값으로 -14 LUFS 기준 재생 볼륨을 보정합니다.">-14 LUFS OFF</button>
             </div>
 
+            <div class="lyrics-panel empty" id="lyricsPanel">가사/프롬프트 정보가 있으면 여기에 표시됩니다.</div>
+
         </aside>
 
         <aside class="queue-panel">
@@ -1100,7 +1122,7 @@ def render_player_ranking_html(
             <div class="playlist" id="playlist">
                 <div class="playlist-empty">
                     아직 플레이리스트가 비어 있습니다.<br>
-                    오른쪽 랭킹에서 앨범 이미지나 체크 버튼을 눌러 추가하세요.
+                    왼쪽 차트에서 앨범 이미지나 + 버튼을 눌러 추가하세요.
                 </div>
             </div>
         </aside>
@@ -2080,7 +2102,7 @@ function cycleSort(key) {
         if (!filtered.length) {
             songTableBody.innerHTML = `
                 <tr>
-                    <td colspan="9" style="padding:18px; text-align:center; color:#6b7280;">
+                    <td colspan="7" style="padding:18px; text-align:center; color:#6b7280;">
                         표시할 곡이 없습니다.
                     </td>
                 </tr>
@@ -2132,13 +2154,14 @@ function cycleSort(key) {
                     <td class="style-cell">
                         ${renderStyleTags(song.style_tags)}
                     </td>
-                    <td class="num">${formatInt(song.play_count)}</td>
-                    <td class="num" style="text-align:center;">
-                        <button class="like-btn ${song.liked ? "active" : ""}" data-action="toggle-like" data-song-id="${escapeHtml(song.id)}" title="좋아요">♥ <span>${formatInt(song.upvote_count)}</span></button>
+                    <td class="stat-cell">
+                        <div class="stat-stack">
+                            <button class="like-btn ${song.liked ? "active" : ""}" data-action="toggle-like" data-song-id="${escapeHtml(song.id)}" title="좋아요">♥ <span>${formatInt(song.upvote_count)}</span></button>
+                            <div class="mini-stat-line">▶ ${formatInt(song.play_count)} · 💬 ${formatInt(song.comment_count)}</div>
+                        </div>
                     </td>
-                    <td class="num">${formatInt(song.comment_count)}</td>
                     <td style="text-align:center;">
-                        <button class="rank-info-btn" data-action="rank-info" data-song-id="${escapeHtml(song.id)}">상세</button>
+                        <button class="rank-info-btn" data-action="rank-info" data-song-id="${escapeHtml(song.id)}">정보</button>
                     </td>
                 </tr>
             `;
@@ -2338,7 +2361,7 @@ function cycleSort(key) {
             playlistEl.innerHTML = `
                 <div class="playlist-empty">
                     아직 플레이리스트가 비어 있습니다.<br>
-                    오른쪽 랭킹에서 앨범 이미지나 체크 버튼을 눌러 추가하세요.
+                    왼쪽 차트에서 앨범 이미지나 + 버튼을 눌러 추가하세요.
                 </div>
             `;
             return;

@@ -76,6 +76,7 @@ def inject_css():
         }
         .block-container {padding-top:.9rem; padding-bottom:3rem; max-width:1460px;}
         .bc-topbar {display:flex; align-items:center; justify-content:space-between; gap:18px; border:1px solid rgba(231,221,208,.95); border-radius:18px; padding:12px 14px; background:rgba(255,253,248,.84); backdrop-filter:blur(18px); box-shadow:0 16px 42px rgba(72,60,47,.08); margin-bottom:12px;}
+        .bc-topbar-slim {min-height:58px; margin-bottom:10px;}
         .bc-brand {display:flex; align-items:center; gap:11px;}
         .bc-logo {width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#e7ddd0,#cfdac9); color:#2c2925; font-weight:1000; box-shadow:0 8px 20px rgba(88,76,61,.13);}
         .bc-brand-title {font-size:22px; font-weight:1000; letter-spacing:-.045em; line-height:1; color:#24211e;}
@@ -87,6 +88,9 @@ def inject_css():
         .bc-mini {font-size:12px; color:var(--bc-muted);}
         .bc-profile-row {display:flex; align-items:center; gap:10px; justify-content:flex-end;}
         .bc-avatar {width:32px; height:32px; border-radius:999px; object-fit:cover; background:#efe6db;}
+        .bc-avatar-letter {display:inline-flex; align-items:center; justify-content:center; font-weight:900; color:#2f3a2f;}
+        .bc-profile-pop {display:flex; align-items:center; gap:10px; padding:4px 2px 8px;}
+        .bc-profile-pop span {display:block; color:var(--bc-muted); font-size:12px; margin-top:2px;}
         div[data-testid="stHorizontalBlock"] button[kind="primary"], div[data-testid="stHorizontalBlock"] button[kind="secondary"], [data-testid="stPopover"] button {border-radius:10px !important; min-height:38px; box-shadow:none !important; border:1px solid #e4d8c8 !important;}
         div[data-testid="stHorizontalBlock"] button[kind="primary"] {background:#2f3a2f !important; color:#fffdf8 !important;}
         div[data-testid="stHorizontalBlock"] button[kind="secondary"], [data-testid="stPopover"] button {background:rgba(255,253,248,.72) !important; color:#5a5148 !important;}
@@ -119,27 +123,28 @@ def render_header():
     avatar_url = (profile or {}).get("avatar_url") or ""
     status = "서버 연결됨" if is_supabase_ready() else "서버 설정 필요"
     mode = "Creator" if is_logged_in() else "Guest"
-    avatar_html = f'<img class="bc-avatar" src="{html.escape(avatar_url)}">' if avatar_url else '<div class="bc-avatar"></div>'
-    st.markdown(
-        f"""
-        <div class="bc-topbar">
-          <div class="bc-brand">
-            <div class="bc-logo">B</div>
-            <div><div class="bc-brand-title">Busy Chart</div><div class="bc-brand-sub">v1.0</div></div>
-          </div>
-          <div class="bc-status"><div class="bc-profile-row">{avatar_html}<b>{html.escape(display_name)}</b></div>{status} · {mode}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    cols = st.columns([1, 1, 1, 1.1, 3], gap="small")
-    with cols[0]: render_menu_button("차트", "chart")
-    with cols[1]: render_menu_button("플레이리스트", "playlists")
-    with cols[2]: render_menu_button("AI 큐레이션", "ai")
-    with cols[3]:
+    avatar_html = f'<img class="bc-avatar" src="{html.escape(avatar_url)}">' if avatar_url else '<div class="bc-avatar bc-avatar-letter">B</div>'
+
+    top_l, top_r = st.columns([6, 1.25], gap="small")
+    with top_l:
+        st.markdown(
+            f"""
+            <div class="bc-topbar bc-topbar-slim">
+              <div class="bc-brand">
+                <div class="bc-logo">B</div>
+                <div><div class="bc-brand-title">Busy Chart</div><div class="bc-brand-sub">v1.0</div></div>
+              </div>
+              <div class="bc-status">{status} · {mode}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with top_r:
         if is_logged_in():
             try:
-                with st.popover("내 아이디", use_container_width=True):
+                with st.popover(f"👤 {display_name} ▾", use_container_width=True):
+                    st.markdown(f"<div class='bc-profile-pop'>{avatar_html}<b>{html.escape(display_name)}</b><span>{html.escape((profile or {}).get('email') or '')}</span></div>", unsafe_allow_html=True)
+                    st.divider()
                     if st.button("프로필 수정", use_container_width=True): set_page("profile")
                     if st.button("새 곡 업로드", use_container_width=True): set_page("upload")
                     if st.button("업로드 관리", use_container_width=True): set_page("manage")
@@ -147,12 +152,17 @@ def render_header():
                     if st.button("로그아웃", use_container_width=True):
                         st.logout()
             except Exception:
-                render_menu_button("내 아이디", "profile")
+                if st.button(f"👤 {display_name}", use_container_width=True):
+                    set_page("profile")
         else:
             if st.button("로그인", use_container_width=True, type="secondary"):
                 try: st.login()
                 except Exception as exc: st.error(f"로그인 설정 확인: {exc}")
 
+    cols = st.columns([1, 1, 1, 5], gap="small")
+    with cols[0]: render_menu_button("차트", "chart")
+    with cols[1]: render_menu_button("플레이리스트", "playlists")
+    with cols[2]: render_menu_button("AI 큐레이션", "ai")
 
 def format_dt(value: str) -> str:
     try:
@@ -267,6 +277,7 @@ def render_old_chart_component():
         "supabaseUrl": public_cfg.get("supabase_url", ""),
         "anonKey": public_cfg.get("supabase_anon_key", ""),
         "sessionId": get_session_id(),
+        "playlistToken": get_user_id() or "",
         "message": "로그인 후 현재 플레이리스트를 저장할 수 있습니다.",
     }
     render_player_ranking_html(
